@@ -1,0 +1,116 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>MCP map history contract</title>
+<pre id="result">RUNNING</pre>
+<script>
+let tick = 1000, mode = "visible", complete = true;
+let lastRequest;
+const tree = {id: 2, owner: 0, kind: "tree", template: "gaia/tree", classes: ["Tree"],
+    position: {x: 22, z: 22}, currently_visible: true, static: true,
+    hitpoints: 30, resource: {type: "wood.tree", amount: 100, max: 200}, orders: "SECRET",
+    properties: {version: 1, identity: {classes: ["Structure"], special_roles: []},
+        capabilities: {attack: true}, gathering: null, storage: null,
+        combat: {attacks: {Melee: {damage: {Hack: 4}}}}, packing: null,
+        garrison: {capacity: 10, allowed_classes: ["Infantry"], occupied_slots: 7, occupants: [999]},
+        building: {is_building: true, owner: 0, hitpoints: 90, research: {technologies: ["phase_town"]},
+            production: {queue: [{technology_template: "SECRET"}]},
+            resource: {infinite: true, amount: null, max: null, gatherers: 4},
+            foundation: {builders: 1}, repair: null},
+        inventory: "SECRET", current_target: "SECRET", rally_point: "SECRET", activity: "SECRET",
+        garrisoned_in: "SECRET", construction: "SECRET"}};
+const unit = {id: 3, owner: 2, kind: "unit", template: "units/worker", position: {x: 21,z: 21},
+    currently_visible: true, static: false, secretEconomy: "SECRET"};
+const region = {x_min: 20,z_min: 20,x_max: 24,z_max: 24,cell_size: 4};
+const Engine = {
+    GuiInterfaceCall: (name, request) => {
+        if (name !== "MCPGetMapRegion") throw new Error("Unexpected engine call");
+        lastRequest = request;
+        return {time: tick, columns: 1, rows: 1,
+            cells: [{x: 22,z: 22,in_bounds: true,explored: mode !== "hidden",
+                currently_visible: mode === "visible",terrain: mode === "visible" ? {height: 10,water_level: 0} : null}],
+            objects: mode === "visible" ? [tree, unit] : [],truncated: !complete,
+            remembered: request.remembered.map(item => ({id: item.id,
+                explored: mode !== "hidden",currently_visible: mode === "visible" || mode === "empty"}))};
+    }
+};
+</script>
+<script src="../mcp_player/gui/session/zy_mcp_map_memory.js"></script>
+<script>
+try {
+    const assert = (value, message) => {if (!value) throw new Error(message);};
+    const observe = (session = "session", player = 1) => MCPMapMemory.observe(region,player,session);
+    MCPMapMemory.validateRegion(region,128);
+    let result = observe();
+    assert(result.objects.length === 2 && MCPMapMemory.objects.size === 1,"Visible/static split");
+    assert(!JSON.stringify(result).includes("SECRET"),"Raw state leaked");
+    assert(lastRequest.remembered.length === 0,"Invented history");
+    const terrainOnly = MCPMapMemory.observe(region,1,"session",false);
+    assert(lastRequest.include_objects === false && lastRequest.remembered.length === 0,
+        "Terrain-only request queried remembered objects");
+    assert(terrainOnly.objects.length === 0 && MCPMapMemory.objects.size === 1,
+        "Terrain-only request returned or changed object history");
+    result = observe();
+    result.objects[0].position.x = 999;
+    result.objects[0].resource.amount = 999;
+    result.objects[0].properties.combat.attacks.Melee.damage.Hack = 999;
+    result.objects[0].properties.building.research.technologies[0] = "changed";
+    result.objects[0].properties.building.resource.infinite = false;
+    result.cells[0].terrain.height = 999;
+    tree.resource.amount = 0; tree.owner = 2; tree.hitpoints = 0;
+    tree.properties.combat.attacks.Melee.damage.Hack = 888;
+    tree.properties.building.owner = 2;
+    tree.properties.building.hitpoints = 0;
+    tree.properties.building.research.technologies[0] = "changed-live";
+    tick = 2000; mode = "fog";
+    result = observe();
+    assert(lastRequest.remembered[0].x === 22 && lastRequest.remembered[0].id === 2,"Saved coordinate changed");
+    assert(result.objects.length === 1 && !result.objects[0].currently_visible,"Mobile history retained");
+    assert(result.objects[0].owner === 0 && result.objects[0].resource.amount === 100 && result.objects[0].hitpoints === 30,
+        "Fog state changed with live owner/depletion/death or returned-reference mutation");
+    assert(result.objects[0].last_seen === 1000 && result.cells[0].terrain.last_seen === 1000 && result.cells[0].terrain.height === 10,
+        "Fog geometry refreshed or cache mutable");
+    assert(result.objects[0].properties.combat.attacks.Melee.damage.Hack === 4,
+        "Fog properties refreshed or shared live nested references");
+    assert(result.objects[0].properties.building.owner === 0 && result.objects[0].properties.building.hitpoints === 90 &&
+        result.objects[0].properties.building.research.technologies[0] === "phase_town",
+        "Fog building properties refreshed or shared live nested references");
+    assert(result.objects[0].properties.building.production === null && result.objects[0].properties.building.foundation === null &&
+        result.objects[0].properties.building.repair === null && result.objects[0].properties.building.resource.gatherers === null,
+        "Private building queue/workers retained in map memory");
+    assert(result.objects[0].properties.garrison.occupied_slots === null &&
+        result.objects[0].properties.garrison.occupants === null, "Private garrison properties leaked");
+    result.objects[0].properties.combat.attacks.Melee.damage.Hack = 777;
+    result.objects[0].resource.amount = 123;
+    result = observe();
+    assert(result.objects[0].resource.amount === 100,"Fog returned-reference mutation");
+    assert(result.objects[0].properties.combat.attacks.Melee.damage.Hack === 4,"Fog property returned-reference mutation");
+    mode = "hidden"; tick = 3000;
+    result = observe();
+    assert(result.cells[0].terrain === null && result.objects.length === 0 && MCPMapMemory.objects.size === 1,
+        "Unknown data leaked or disappearance discarded history");
+    mode = "empty"; complete = false;
+    result = observe();
+    assert(MCPMapMemory.objects.size === 1 && result.truncated,"Truncated absence purged history");
+    complete = true; result = observe();
+    assert(MCPMapMemory.objects.size === 0 && result.objects.length === 0,"Visible empty position failed to clear history");
+    mode = "visible"; tick = 4000; observe();
+    mode = "fog";
+    result = observe("other-session");
+    assert(result.objects.length === 0 && result.cells[0].terrain === null,"Session history leaked");
+    mode = "visible"; observe("other-session"); mode = "fog";
+    result = observe("other-session",2);
+    assert(result.objects.length === 0 && result.cells[0].terrain === null,"Player history leaked");
+    mode = "visible"; observe("other-session",2); mode = "fog"; tick = 100;
+    result = observe("other-session",2);
+    assert(result.objects.length === 0 && result.cells[0].terrain === null,"Rewound game retained future knowledge");
+    assert(!MCPMapMemory.inside({x:24,z:22},region),"Upper edge not half-open");
+    for (const bad of [{cell_size:3},{x_max:20},{x_min:NaN},{x_max:1000},{extra:1},{cell_size:true}]) {
+        let rejected = false;
+        try {MCPMapMemory.validateRegion(Object.assign({},region,bad),128);} catch (_) {rejected = true;}
+        assert(rejected,"Bad region accepted: " + JSON.stringify(bad));
+    }
+    document.getElementById("result").textContent = "PASS: visible snapshots, fog freeze, hidden deletion/depletion/ownership, building property freeze/private-state stripping, deep-copy isolation, mobile exclusion, complete-query eviction, session/player/rewind reset, bounds";
+} catch (error) {
+    document.getElementById("result").textContent = "FAIL: " + error.stack;
+}
+</script>

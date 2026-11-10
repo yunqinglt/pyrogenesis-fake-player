@@ -1,0 +1,183 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>MCP companion privacy contract</title>
+<pre id="result">RUNNING</pre>
+<script>
+var g_Settings = {};
+var g_IsObserver = false;
+var g_IsReplay = false;
+var g_ViewedPlayer = 1;
+const g_InitAttributes = {settings: {RevealMap: false}, privateMapSeed: "secret-map-seed"};
+function onTick() {}
+const files = new Map();
+const commands = [];
+let revealed = false;
+const playerStates = [null,
+    { state: "active", controlsAll: false, phase: "town", resourceCounts: { wood: 100, food: 50000 },
+        resourceGatherers: {food: 3, wood: 1}, popCount: 5, popLimit: 20, popMax: 300 },
+    { state: "active", resourceCounts: { wood: 987654 }, researchedTechs: ["secret-enemy-tech"] }];
+const own = { id: 42, player: 1, template: "units/test/worker", identity: { classes: ["Unit", "Worker"] },
+    position: { x: 12, y: 0, z: 15 }, speed: { walk: 8 }, unitAI: { isIdle: true, orders: [{ secret: "must-not-serialize" }] },
+    hitpoints: 100, maxHitpoints: 100 };
+const foundation = { id: 43, player: 1, template: "foundation|structures/test/house",
+    identity: { classes: ["Structure"] }, foundation: { numBuilders: 2 },
+    hitpoints: 150, maxHitpoints: 500 };
+const busyBuilding = { id: 44, player: 1, template: "structures/test/civil_centre",
+    identity: { classes: ["Structure"] }, production: { queue: [
+        {templateName: "phase_city", progress: 0.25, timeRemaining: 10000,
+            metadata: {secret: "private-production-metadata"}, targetEntities: [999]},
+        {unitTemplate: "units/test/worker", count: 3, progress: 0.5, timeRemaining: 5000, paused: true}
+    ] } };
+const enemy = { id: 999, player: 2, template: "secret-enemy-template", position: { x: 300, z: 400 }, hitpoints: 33 };
+const Engine = {
+    GetPlayerID: () => 1,
+    ConfigDB_GetValue: () => "11111111111111111111111111111111",
+    GuiInterfaceCall: (name, id) => {
+        if (name === "IsMapRevealed") return revealed;
+        // Inject an unowned entity into the result to prove ownership is
+        // checked again before projection and command authorization.
+        if (name === "GetPlayerEntities") return [42, 43, 44, 999];
+        if (name === "GetEntityState") return ({42: own, 43: foundation, 44: busyBuilding})[id] || enemy;
+        if (name === "MCPGetEntityProperties") {
+            if ([42, 43, 44].indexOf(id) === -1) throw new Error("Foreign properties queried");
+            return {version: 1, capabilities: {build: id === 42}};
+        }
+        if (name === "GetStartedResearch") return {phase_city: {progress: 0.25,
+            timeRemaining: 10000, researcher: 42, paused: false}};
+        if (name === "MCPGetOwnTerritoryPercent") return 12;
+        if (name === "GetSimulationState") return {
+            timeElapsed: 1000, mapSize: 512,
+            players: playerStates
+        };
+        throw new Error("Forbidden unexpected engine call: " + name);
+    },
+    FileExists: path => files.has(path),
+    ReadJSONFile: path => files.get(path),
+    WriteJSONFile: (path, object) => files.set(path, JSON.parse(JSON.stringify(object))),
+    PostNetworkCommand: command => commands.push(command)
+};
+</script>
+<script src="../mcp_player/gui/session/zy_mcp_map_memory.js"></script>
+<script src="../mcp_player/gui/session/zz_mcp_player.js"></script>
+<script>
+try {
+    MCPPlayerBridge.interval = 0;
+    const assert = (value, message) => { if (!value) throw new Error(message); };
+    const observation = () => files.get(MCPPlayerBridge.observationPath);
+    const issue = (id, action, extra = {}) => {
+        files.set(MCPPlayerBridge.commandPath, Object.assign({version: 1, session: "11111111111111111111111111111111", id, action}, extra));
+        onTick();
+        return observation();
+    };
+    let current = issue("observe", "observe");
+    const text = JSON.stringify(current);
+    assert(current.own_entities.length === 3 && current.own_entities[0].id === 42, "Ownership projection failed");
+    assert(current.outcome === "active" && current.game_over === false, "Active match outcome missing");
+    assert(current.scoreboard.phase === "town" && current.scoreboard.population.count === 5,
+        "Own-player phase or population missing");
+    assert(current.scoreboard.resources.food === 50000 && current.scoreboard.gatherers.food === 3,
+        "Own-player economy or gatherer counts missing");
+    assert(current.scoreboard.idle_units.count === 1 && current.scoreboard.idle_units.worker_count === 1,
+        "Idle unit counts missing");
+    assert(current.scoreboard.territory_percent === 12 && current.scoreboard.current_research[0].technology === "phase_city",
+        "Territory or research scoreboard missing");
+    assert(current.scoreboard.construction.length === 1 && current.scoreboard.construction[0].id === 43 &&
+        current.scoreboard.construction[0].progress === 0.3 && current.scoreboard.construction[0].builders === 2,
+        "Construction progress or builder count missing");
+    const queue = current.scoreboard.busy_buildings[0].queue;
+    assert(current.scoreboard.busy_buildings.length === 1 && current.scoreboard.busy_buildings[0].id === 44 &&
+        queue.length === 2 && queue[0].template_name === "phase_city" && queue[0].progress === 0.25 &&
+        queue[0].time_remaining_ms === 10000 && queue[1].unit_template === "units/test/worker" &&
+        queue[1].count === 3 && queue[1].paused === true,
+        "Busy-building queue projection missing");
+    assert(current.own_entities.every(entity => entity.owner === current.player_id), "Owner field did not match active player");
+    assert(current.own_entities[0].properties.capabilities.build, "Owned properties missing");
+    for (const secret of ["secret-enemy", "987654", "999", "must-not-serialize", "unitAI", "orders",
+        "private-production-metadata", "targetEntities", "metadata"])
+        assert(!text.includes(secret), "Private state leaked: " + secret);
+    assert(current.session === "11111111111111111111111111111111", "Missing session binding");
+    current = issue("move", "move", {entities: [42], x: 20, z: 25, queued: false});
+    assert(current.last_action.ok && commands.length === 1 && commands[0].type === "walk", "Move failed");
+    assert(commands[0].entities[0] === 42, "Move affected wrong entity");
+    onTick();
+    assert(commands.length === 1, "Command replayed");
+    current = issue("foreign", "move", {entities: [999], x: 20, z: 25});
+    assert(!current.last_action.ok && commands.length === 1, "Foreign entity was allowed");
+    current = issue("debug", "reveal-map", {});
+    assert(!current.last_action.ok && commands.length === 1, "Debug action was allowed");
+    current = issue("raw", "move", {entities: [42], x: 20, z: 25, player: 2});
+    assert(!current.last_action.ok && commands.length === 1, "Raw fields were allowed");
+    current = issue("outside", "move", {entities: [42], x: 513, z: 25});
+    assert(!current.last_action.ok && commands.length === 1, "Outside-map coordinates allowed");
+    current = issue("wrong-session", "move", {session: "old-session", entities: [42], x: 20, z: 25});
+    assert(commands.length === 1, "Cross-session command was accepted");
+    current = issue("stop", "stop", {entities: [42]});
+    assert(current.last_action.ok && commands.length === 2 && commands[1].type === "stop", "Stop failed");
+    current = issue("bad-map", "observe_map", {region:{x_min:0,z_min:0,x_max:512,z_max:512,cell_size:1}});
+    assert(!current.last_action.ok && commands.length === 2 && !current.map_region,"Invalid map region accepted");
+    current = issue("unavailable-map", "observe_map", {region:{x_min:0,z_min:0,x_max:16,z_max:16,cell_size:4}});
+    assert(!current.last_action.ok && !current.map_region && current.available,"Missing map backend failed open");
+    assert(current.last_action.error === "Player-view map observation is unavailable.","Map error leaked engine exception");
+    revealed = true;
+    onTick();
+    assert(observation().available === false && !observation().own_entities, "Reveal-map did not fail closed");
+    g_InitAttributes.settings.RevealMap = true;
+    onTick();
+    assert(observation().available === true, "Public room reveal rule was rejected");
+    assert(observation().own_entities.length === 3 && observation().own_entities[0].id === 42,
+        "Public room reveal bypassed ownership projection");
+    assert(!JSON.stringify(observation()).includes("secret-map-seed"), "Private init attributes leaked");
+    g_InitAttributes.settings.RevealMap = "true";
+    onTick();
+    assert(observation().available === false, "Non-boolean room reveal rule was accepted");
+    g_InitAttributes.settings.RevealMap = false;
+    revealed = false;
+    g_IsObserver = true;
+    onTick();
+    assert(observation().available === false, "Observer did not fail closed");
+    g_IsObserver = false;
+    g_IsReplay = true;
+    onTick();
+    assert(observation().available === false, "Replay did not fail closed");
+    g_IsReplay = false;
+    g_ViewedPlayer = 2;
+    onTick();
+    assert(observation().available === false, "Foreign view did not fail closed");
+
+    playerStates[1].state = "defeated";
+    g_IsObserver = true;
+    g_ViewedPlayer = -1;
+    revealed = true;
+    onTick();
+    current = observation();
+    assert(current.available && current.outcome === "defeated" && current.game_over === false,
+        "Defeat status was unavailable after observer view switch");
+    assert(!current.own_entities && !current.resources && !JSON.stringify(current).includes("secret-enemy"),
+        "Finished-player status included economy or world data");
+
+    playerStates[2].state = "defeated";
+    onTick();
+    current = observation();
+    assert(current.outcome === "defeated" && current.game_over === true,
+        "All-defeated draw state was not kept distinct from a win");
+
+    playerStates[1].state = "won";
+    onTick();
+    current = observation();
+    assert(current.outcome === "won" && current.game_over === true,
+        "Authoritative win state was not projected");
+
+    playerStates[1].state = "unknown";
+    playerStates[2].state = "unknown";
+    g_IsObserver = false;
+    g_ViewedPlayer = 1;
+    revealed = false;
+    onTick();
+    current = observation();
+    assert(current.outcome === "unknown" && current.game_over === null,
+        "Unknown outcome was incorrectly treated as active or terminal");
+    document.getElementById("result").textContent = "PASS: privacy projection, authoritative outcomes, terminal status after view switch, session binding, actions, ownership, schema, bounds and observer/replay/view guards";
+} catch (error) {
+    document.getElementById("result").textContent = "FAIL: " + error.stack;
+}
+</script>

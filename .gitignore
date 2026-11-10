@@ -1,0 +1,21 @@
+# Python environments and generated files
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+
+# Local 0 A.D. source checkout and runtime data
+_0ad-src/
+.runtime/
+*.0adsave
+
+# Local editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*截图*.png

@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyrogenesis-fake-player"
+version = "0.1.0"
+description = "A fair-play MCP client for local 0 A.D. games"
+requires-python = ">=3.11"
+dependencies = ["mcp>=1.20,<2"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10"]
+
+[project.scripts]
+pyrogenesis-mcp = "pyrogenesis_mcp.server:main"
+pyrogenesis-analyze = "pyrogenesis_analysis.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

@@ -1,0 +1,70 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>MCP production commands contract</title>
+<pre id="result">RUNNING</pre>
+<script>
+function onTick() {}
+const commands = [], checks = [];
+let requirements = true;
+const producer = {id:10, player:2, identity:{classes:["Structure"]}, production:{queue:[]},
+    trainer:{entities:["units/ptol/support_civilian","gaia/fauna_sheep"]},
+    researcher:{technologies:["phase_town_generic",{pair:true,top:"pair/top",bottom:"pair/bottom"}]}};
+const Engine = {
+    ConfigDB_GetValue: () => "22222222222222222222222222222222", GetPlayerID: () => 2,
+    PostNetworkCommand: command => commands.push(command),
+    GuiInterfaceCall: (name,arg) => {
+        if (name !== "CheckTechnologyRequirements" || Object.keys(arg).join() !== "tech")
+            throw new Error("Unexpected GUI query");
+        checks.push(arg.tech);
+        return requirements;
+    }
+};
+</script>
+<script src="../mcp_player/gui/session/zz_mcp_player.js"></script>
+<script>
+try {
+    const assert = (value,message) => { if (!value) throw new Error(message); };
+    let sequence = 0;
+    const issue = (action,fields={},state=producer) => MCPPlayerBridge.execute(Object.assign({
+        version:1,session:"22222222222222222222222222222222",id:String(++sequence),action,entities:[10]
+    },fields),[state],512);
+    const rejects = (action,fields={},state=producer) => {
+        const count = commands.length;
+        let failed = false;
+        try { issue(action,fields,state); } catch (_) { failed = true; }
+        assert(failed && commands.length === count,"Invalid production posted a command");
+    };
+    issue("train",{template:"units/ptol/support_civilian",count:2});
+    assert(JSON.stringify(commands[0]) === JSON.stringify({type:"train",entities:[10],
+        template:"units/ptol/support_civilian",count:2,pushFront:false}),"Wrong native train command");
+    issue("train",{template:"gaia/fauna_sheep",count:1});
+    issue("research",{template:"phase_town_generic"});
+    assert(JSON.stringify(commands.at(-1)) === JSON.stringify({type:"research",entity:10,
+        template:"phase_town_generic",pushFront:false}),"Wrong native research command");
+    issue("research",{template:"pair/top"});
+    issue("research",{template:"pair/bottom"});
+    for (const action of ["train","research"]) {
+        const fields = {template:action === "train" ? "units/ptol/support_civilian" : "phase_town_generic"};
+        if (action === "train") fields.count = 1;
+        rejects(action,fields,Object.assign({},producer,{player:1}));
+        rejects(action,fields,Object.assign({},producer,{foundation:{numBuilders:1}}));
+        rejects(action,fields,Object.assign({},producer,{production:null}));
+        rejects(action,fields,Object.assign({},producer,{identity:{classes:["Unit"]}}));
+        rejects(action,Object.assign({},fields,{entities:[10,11]}));
+        rejects(action,Object.assign({},fields,{player:1}));
+    }
+    for (const count of [0,-1,101,true,1.5,"1"])
+        rejects("train",{template:"units/ptol/support_civilian",count});
+    rejects("train",{template:"units/other/hero",count:1});
+    rejects("research",{template:"unavailable_technology"});
+    rejects("research",{template:"phase_town_generic",count:1});
+    const before = checks.length;
+    rejects("research",{template:"phase_town_generic"},Object.assign({},producer,{player:1}));
+    assert(checks.length === before,"Foreign producer triggered a requirements query");
+    requirements = false;
+    rejects("research",{template:"phase_town_generic"});
+    document.getElementById("result").textContent = "PASS: owned completed producers, exact native training/research, advertised options and pairs, bounded counts, prerequisites, no partial side effects";
+} catch (error) {
+    document.getElementById("result").textContent = "FAIL: " + error.stack;
+}
+</script>

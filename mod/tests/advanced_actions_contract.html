@@ -1,0 +1,159 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>MCP siege, transport and support actions contract</title>
+<pre id="result">RUNNING</pre>
+<script>
+function onTick() {}
+function MatchesClassList(classes, expression) {
+    if (!expression) return false;
+    const alternatives = Array.isArray(expression) ? expression : expression.split(/\s+/);
+    return alternatives.some(term => term.split("+").every(item => classes.includes(item)));
+}
+const commands = [], reads = [], foreignStates = new Map();
+const mover = {position:{x:10,z:10},speed:{walk:8},unitAI:{canPatrol:true,canGuard:true}};
+const siege = {id:10,player:2,identity:{classes:["Unit","Siege"]},pack:{packed:false},
+    mcpProperties:{packing:{packed:false,changing:false}}};
+const packed = {id:11,player:2,identity:{classes:["Unit","Siege"]},pack:{packed:true},
+    mcpProperties:{packing:{packed:true,changing:false}}};
+const holder = {id:20,player:2,identity:{classes:["Structure"]},garrisonHolder:{entities:[21,22,99]},
+    production:{queue:[{id:0},{id:7}]},turretHolder:{turretPoints:[{allowedClasses:"Unit",entity:null}]}};
+const resident = {id:21,player:2,identity:{classes:["Unit"]},garrisonable:{holder:20}};
+const otherResident = {id:22,player:2,identity:{classes:["Unit"]},garrisonable:{holder:20}};
+const turret = {id:23,player:2,identity:{classes:["Unit"]},turretable:{holder:20,ejectable:true}};
+const support = Object.assign({id:30,player:2,identity:{classes:["Unit","Organic"]},attack:{Melee:{}},
+    heal:{healableClasses:"Organic",unhealableClasses:"Mechanical"},trader:{goods:{}},
+    treasureCollector:true,resourceCarrying:[{type:"wood",amount:10}],turretable:{holder:0}},mover);
+const patient = {id:31,player:2,identity:{classes:["Unit","Organic"]},needsHeal:true,guard:{}};
+const market = {id:32,player:2,identity:{classes:["Structure"]},market:{land:true,naval:false},
+    resourceDropsite:{types:["wood"]}};
+const treasure = {id:40,player:0,visibility:"visible",treasure:{resources:{wood:100}}};
+const hidden = {id:41,player:0,visibility:"hidden",treasure:{resources:{wood:999}}};
+foreignStates.set(40,treasure); foreignStates.set(41,hidden);
+const owned = [siege,packed,holder,resident,otherResident,turret,support,patient,market];
+const MCPMetadata = {describe:(player,states,request) => ({player,entity_id:request.entity_id,kind:request.kind})};
+const Engine = {
+    GetPlayerID: () => 2, ConfigDB_GetValue: () => "44444444444444444444444444444444",
+    PostNetworkCommand: command => commands.push(JSON.parse(JSON.stringify(command))),
+    GuiInterfaceCall: (name,arg) => {
+        if (name === "MCPGetEntityProperties") {
+            const state = foreignStates.get(arg);
+            if (!state || state.visibility !== "visible") throw new Error("Unavailable target");
+            reads.push([name,arg]); return {};
+        }
+        if (name === "GetEntityState") {
+            if (!reads.some(item => item[0] === "MCPGetEntityProperties" && item[1] === arg))
+                throw new Error("Unguarded target read");
+            reads.push([name,arg]); return foreignStates.get(arg);
+        }
+        throw new Error("Unexpected GUI call " + name);
+    }
+};
+</script>
+<script src="../mcp_player/gui/session/zz_mcp_player.js"></script>
+<script>
+try {
+    const assert = (value,message) => {if (!value) throw new Error(message);};
+    const same = (value,expected,message) => assert(JSON.stringify(value) === JSON.stringify(expected),message);
+    let sequence = 0;
+    const issue = (action,fields,states=owned) => MCPPlayerBridge.execute(Object.assign({
+        version:1,session:"44444444444444444444444444444444",id:String(++sequence),action},fields),states,512);
+    const rejects = (action,fields,states=owned) => {
+        const before = commands.length;
+        let failed = false;
+        try {issue(action,fields,states);} catch (_) {failed = true;}
+        assert(failed && commands.length === before,"Rejected request posted a command: " + action);
+    };
+    issue("packing",{entities:[10],packed:true,queued:true});
+    same(commands.at(-1),{type:"pack",entities:[10],pack:true,queued:true,pushFront:false},"Wrong native folding");
+    issue("packing",{entities:[11],packed:false});
+    same(commands.at(-1),{type:"pack",entities:[11],pack:false,queued:false,pushFront:false},"Wrong native deployment");
+    rejects("packing",{entities:[10],packed:false});
+    rejects("packing",{entities:[10],packed:1});
+    rejects("packing",{entities:[10],packed:true,queued:1});
+    rejects("packing",{entities:[10,30],packed:true});
+    rejects("cancel_packing",{entities:[10]});
+    siege.mcpProperties.packing.changing = true;
+    packed.mcpProperties.packing.changing = true;
+    rejects("packing",{entities:[10],packed:true});
+    issue("cancel_packing",{entities:[10,11]});
+    same(commands.slice(-2),[
+        {type:"cancel-pack",entities:[10],pack:true,queued:false,pushFront:false},
+        {type:"cancel-pack",entities:[11],pack:false,queued:false,pushFront:false}
+    ],"Mixed transition cancellation used wrong native directions");
+    rejects("cancel_packing",{entities:[10,30]});
+    const foreignSiege = Object.assign({},siege,{player:1});
+    rejects("cancel_packing",{entities:[10]},[foreignSiege]);
+    issue("unload",{holder_id:20,entities:[21,22]});
+    same(commands.at(-1),{type:"unload",garrisonHolder:20,entities:[21,22]},"Wrong native unload");
+    rejects("unload",{holder_id:20,entities:[21,99]});
+    rejects("unload",{holder_id:20,entities:[30]});
+    rejects("unload",{holder_id:999,entities:[21]});
+    rejects("unload",{holder_id:20,entities:[21],player:1});
+    resident.garrisonable.holder = 999;
+    rejects("unload",{holder_id:20,entities:[21]});
+    resident.garrisonable.holder = 20;
+    holder.player = 1;
+    rejects("unload",{holder_id:20,entities:[21]});
+    holder.player = 2;
+    issue("leave_turret",{entities:[23]});
+    same(commands.at(-1),{type:"leave-turret",entities:[23]},"Wrong native turret exit");
+    turret.turretable.ejectable = false;
+    rejects("leave_turret",{entities:[23]});
+    turret.turretable.ejectable = true;
+    rejects("leave_turret",{entities:[21]});
+    issue("cancel_production",{entities:[20],queue_id:0});
+    same(commands.at(-1),{type:"stop-production",entity:20,id:0},"Wrong native queue cancellation");
+    for (const queue_id of [true,-1,4294967296,1.5,999])
+        rejects("cancel_production",{entities:[20],queue_id});
+    rejects("cancel_production",{entities:[20,32],queue_id:0});
+    const noQueue = Object.assign({},holder,{production:{queue:[]}});
+    rejects("cancel_production",{entities:[20],queue_id:0},[noQueue]);
+    const order = tasks => issue("orders",{entities:[30],orders:tasks});
+    const rejectOrder = tasks => rejects("orders",{entities:[30],orders:tasks});
+    order([{type:"heal",target:31},{type:"guard",target:31},{type:"return_resource",target:32},
+           {type:"trade",target:32},{type:"occupy_turret",target:20},{type:"collect_treasure",target:40}]);
+    const recent = commands.slice(-6);
+    same(recent.map(command => command.type),["heal","guard","returnresource","setup-trade-route","occupy-turret","collect-treasure"],
+        "Wrong support command mapping");
+    assert(recent.every((command,index) => command.queued === (index > 0) && command.pushFront === false &&
+        command.formation === "special/formations/null"),"Support queue/formation semantics changed");
+    assert(recent[3].source === null && recent[3].route === null,"Trade route command fields missing");
+    order([{type:"patrol",x:40,z:50},{type:"attack_move",x:70,z:80}]);
+    same(commands.slice(-2).map(command => [command.type,command.x,command.z,command.allowCapture,command.queued]),
+        [["patrol",40,50,false,false],["attack-walk",70,80,false,true]],"Wrong position commands");
+    const readCount = reads.length;
+    for (const type of ["heal","guard","return_resource","trade","occupy_turret"])
+        rejectOrder([{type,target:41}]);
+    assert(reads.length === readCount,"Own-only support order queried an outside target");
+    rejectOrder([{type:"collect_treasure",target:41}]);
+    assert(reads.length === readCount,"Hidden treasure state was read before LOS authorization");
+    rejectOrder([{type:"heal",target:31},{type:"collect_treasure",target:41}]);
+    rejectOrder([{type:"patrol",x:513,z:0}]);
+    rejectOrder([{type:"attack_move",x:1,z:2,target:40}]);
+    rejectOrder([{type:"patrol",x:true,z:2}]);
+    support.heal = null;
+    rejectOrder([{type:"heal",target:31}]);
+    support.heal = {healableClasses:"Mechanical",unhealableClasses:"Organic"};
+    rejectOrder([{type:"heal",target:31}]);
+    support.unitAI.canGuard = false;
+    rejectOrder([{type:"guard",target:31}]);
+    support.unitAI.canPatrol = false;
+    rejectOrder([{type:"patrol",x:1,z:2}]);
+    support.attack = null;
+    rejectOrder([{type:"attack_move",x:1,z:2}]);
+    support.treasureCollector = false;
+    rejectOrder([{type:"collect_treasure",target:40}]);
+    support.resourceCarrying = [];
+    rejectOrder([{type:"return_resource",target:32}]);
+    market.market.land = false;
+    rejectOrder([{type:"trade",target:32}]);
+    support.turretable = null;
+    rejectOrder([{type:"occupy_turret",target:20}]);
+    const metadata = issue("describe_options",{entity_id:20,kind:"research",ids:null});
+    same(metadata,{entity_count:0,metadata:{player:2,entity_id:20,kind:"research"}},"Metadata dispatch failed");
+    rejects("describe_options",{entity_id:20,kind:"research",ids:null,entities:[20]});
+    document.getElementById("result").textContent = "PASS: exact native pack/cancel/unload/turret/production commands, non-movable own residents, mixed transition direction, queued support/trade/position orders, current LOS, all-batch validation, strict fields and metadata dispatch";
+} catch (error) {
+    document.getElementById("result").textContent = "FAIL: " + error.stack;
+}
+</script>

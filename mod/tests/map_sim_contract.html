@@ -1,0 +1,176 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>MCP map simulation privacy contract</title>
+<pre id="result">RUNNING</pre>
+<script>
+const SYSTEM_ENTITY = 0;
+const IID_Terrain = "terrain", IID_RangeManager = "range", IID_Timer = "timer";
+const IID_WaterManager = "water", IID_Position = "position";
+function GuiInterface() {}
+GuiInterface.prototype.exposedFunctions = { stock: 1 };
+GuiInterface.prototype.Serialize = function() { return { stock: true }; };
+const originalSerialize = GuiInterface.prototype.Serialize;
+const positions = new Map([
+    [1, {x: 18, z: 18}], [2, {x: 22, z: 18}], [3, {x: 26, z: 18}],
+    [4, {x: 30, z: 18}], [5, {x: 42, z: 18}], [6, {x: 18, z: 26}]
+]);
+let circular = false;
+let mapSize = 128;
+let ids = [6, 5, 4, 3, 2, 1];
+const stateReads = [], positionReads = [], terrainReads = [], waterReads = [], propertyReads = [];
+let entityListReads = 0;
+let noPositionReads = false;
+const los = (x, z) => x === 22 ? "fogged" : x === 26 ? "hidden" : "visible";
+const states = new Map([
+    [1, {id: 1, player: 0, template: "gaia/tree", position: positions.get(1), identity: {classes: ["Tree"]},
+        resourceSupply: {type: {generic: "wood", specific: "tree"}, amount: 100, max: 200},
+        secret: "do-not-serialize", unitAI: {orders: ["hidden-order"]}}],
+    [4, {id: 4, player: 2, template: "enemy-unit", position: positions.get(4), identity: {classes: ["Unit"]},
+        speed: {walk: 4}, hitpoints: 50, unitAI: {orders: ["hidden-order"]}}],
+    [6, {player: 0, template: "gaia/treasure", position: positions.get(6), identity: {classes: ["Treasure"]},
+        treasure: {resources: {wood: 75}}, privateEconomy: 9999}]
+]);
+GuiInterface.prototype.GetEntityState = function(player, id) {
+    stateReads.push(id);
+    if ([2, 3, 5].includes(id)) throw new Error("Private or outside state was read: " + id);
+    return states.get(id);
+};
+GuiInterface.prototype.MCPProjectEntityProperties = function(player, state, publicOnly) {
+    if (![1, 4].includes(state.id) || player !== 1 || publicOnly !== true)
+        throw new Error("Wrong entity or private map properties request");
+    propertyReads.push(state.id);
+    return {version: 1, capabilities: {attack: true}, inventory: null, current_target: null};
+};
+const Engine = {
+    QueryInterface: (id, component) => {
+        if (id === SYSTEM_ENTITY) {
+            if (component === IID_Terrain) return {
+                GetMapSize: () => mapSize,
+                GetGroundLevel: (x, z) => {
+                    if (los(x, z) !== "visible") throw new Error("Hidden terrain read");
+                    terrainReads.push([x,z]); return 10;
+                }
+            };
+            if (component === IID_RangeManager) return {
+                GetLosCircular: () => circular,
+                GetLosVisibilityPosition: (x, z) => los(x, z),
+                GetLosVisibility: id => id === 3 ? "hidden" : "visible",
+                GetGaiaAndNonGaiaEntities: () => {entityListReads++; return ids;}
+            };
+            if (component === IID_Timer) return {GetTime: () => 1234};
+            if (component === IID_WaterManager) return {GetWaterLevel: (x,z) => {
+                if (los(x,z) !== "visible") throw new Error("Hidden water read");
+                waterReads.push([x,z]); return 0;
+            }};
+        }
+        if (component === IID_Position) {
+            if (noPositionReads) throw new Error("Remembered ID was looked up");
+            if (id === 3) throw new Error("Hidden entity position read");
+            positionReads.push(id);
+            return {IsInWorld: () => true, GetPosition: () => positions.get(id)};
+        }
+        throw new Error("Unexpected engine access");
+    }
+};
+</script>
+<script src="../mcp_player/simulation/components/zz_mcp_map.js"></script>
+<script>
+try {
+    const assert = (value, message) => {if (!value) throw new Error(message);};
+    const gui = new GuiInterface();
+    const region = {x_min: 16, z_min: 16, x_max: 32, z_max: 32, cell_size: 4};
+    const get = extra => gui.MCPGetMapRegion(1, Object.assign({region}, extra));
+    let result = get({remembered: [{id: 3, x: 22, z: 18}, {id: 100, x: 18, z: 18}]});
+    assert(GuiInterface.prototype.Serialize === originalSerialize && JSON.stringify(gui.Serialize()) === '{"stock":true}', "Serialization changed");
+    assert(GuiInterface.prototype.exposedFunctions.stock && GuiInterface.prototype.exposedFunctions.MCPGetMapRegion, "Whitelist damaged");
+    assert(result.columns === 4 && result.rows === 4 && result.cells.length === 16, "Grid shape");
+    assert(result.cells[0].terrain.height === 10 && result.cells[0].currently_visible, "Visible terrain missing");
+    assert(result.cells[1].explored && !result.cells[1].currently_visible && result.cells[1].terrain === null, "Fog terrain leaked");
+    assert(!result.cells[2].explored && result.cells[2].terrain === null, "Unknown terrain leaked");
+    assert(stateReads.join() === "1,4,6", "Unsafe entity state read or wrong sorting");
+    assert(!positionReads.includes(3), "Hidden entity position read");
+    assert(result.objects.map(x => x.id).join() === "1,4,6", "Visible object selection");
+    assert(result.objects[0].kind === "tree" && result.objects[0].static && result.objects[0].resource.type === "wood.tree", "Tree projection");
+    assert(result.objects[1].kind === "unit" && !result.objects[1].static && result.objects[1].owner === 2, "Visible enemy projection");
+    assert(propertyReads.join() === "1,4" && result.objects[1].properties.capabilities.attack &&
+        result.objects[1].properties.inventory === null, "Map properties did not use the public visible profile");
+    assert(result.objects[2].kind === "treasure" && result.objects[2].resource.amount === 75, "Treasure projection");
+    assert(!JSON.stringify(result).includes("hidden-order") && !JSON.stringify(result).includes("do-not-serialize") && !JSON.stringify(result).includes("privateEconomy"), "Raw state leaked");
+    assert(result.remembered[0].explored && !result.remembered[0].currently_visible && result.remembered[1].currently_visible, "Saved-coordinate LOS");
+    const listsBeforeTerrainOnly = entityListReads;
+    const statesBeforeTerrainOnly = stateReads.length;
+    result = gui.MCPGetMapRegion(1, {region, include_objects: false,
+        remembered: [{id: 3, x: 22, z: 18}]});
+    assert(entityListReads === listsBeforeTerrainOnly && stateReads.length === statesBeforeTerrainOnly,
+        "Terrain-only query enumerated entities");
+    assert(result.objects.length === 0 && result.remembered.length === 0 && !result.truncated,
+        "Terrain-only query returned object history or truncation");
+    ids = []; noPositionReads = true;
+    result = get({remembered: [{id: 123, x: 26, z: 18}]});
+    assert(!result.remembered[0].explored, "Remembered existence consulted");
+    noPositionReads = false;
+    result = gui.MCPGetMapRegion(1, {region: {x_min: 0, z_min: 0, x_max: 16, z_max: 16, cell_size: 4}});
+    assert(!result.cells[0].in_bounds && result.cells[0].terrain === null && result.cells[15].in_bounds, "Square map border mask");
+    circular = true;
+    result = gui.MCPGetMapRegion(1, {region: {x_min: 12, z_min: 12, x_max: 16, z_max: 16, cell_size: 4}});
+    assert(!result.cells[0].in_bounds && result.cells[0].terrain === null, "Circular border mask");
+    circular = false;
+    const invalid = [
+        {region: {...region, cell_size: 0}}, {region: {...region, cell_size: 257}},
+        {region: {...region, x_min: NaN}}, {region: {...region, x_max: 129}},
+        {region: {...region, x_max: 16}}, {region: {...region, raw: true}},
+        {region, remembered: [{id: 1, x: 18, z: 18}, {id: 1, x: 18, z: 18}]},
+        {region, remembered: Array.from({length: 2001}, (_, id) => ({id: id+1,x:18,z:18}))},
+        {region, player: 2}, {region, include_objects: "false"}
+    ];
+    for (const request of invalid) {
+        let rejected = false;
+        try {gui.MCPGetMapRegion(1, request);} catch (_) {rejected = true;}
+        assert(rejected, "Invalid request accepted");
+    }
+    mapSize = 512;
+    let tooMany = false;
+    try {gui.MCPGetMapRegion(1, {region: {x_min: 0, z_min: 0, x_max: 512, z_max: 512, cell_size: 4}});} catch (_) {tooMany = true;}
+    assert(tooMany, "Unbounded sample count accepted");
+    mapSize = 128;
+    let rejected = false;
+    try {gui.MCPGetMapRegion(-1, {region});} catch (_) {rejected = true;}
+    assert(rejected, "Observer accepted");
+    // Hidden objects must not influence the returned count/truncation bit.
+    ids = Array.from({length: 2100}, (_, i) => i + 100);
+    const oldQuery = Engine.QueryInterface;
+    Engine.QueryInterface = (id, component) => {
+        if (id === 0 && component === IID_RangeManager) return {
+            GetLosCircular: () => false, GetLosVisibilityPosition: (x,z) => los(x,z),
+            GetLosVisibility: () => "hidden", GetGaiaAndNonGaiaEntities: () => ids
+        };
+        return oldQuery(id, component);
+    };
+    result = get();
+    assert(!result.truncated && result.objects.length === 0, "Hidden entity count affected output");
+    // The cap counts only validated, visible projected objects, not candidates.
+    gui.GetEntityState = (player, id) => ({
+        player: 0, template: "gaia/tree", identity: {classes: ["Tree"]},
+        position: {x:18,z:18}, resourceSupply: {type: {generic: "wood", specific: "tree"}, amount: 50, max: Infinity}
+    });
+    Engine.QueryInterface = (id, component) => {
+        if (id === 0 && component === IID_RangeManager) return {
+            GetLosCircular: () => false, GetLosVisibilityPosition: (x,z) => los(x,z),
+            GetLosVisibility: () => "visible", GetGaiaAndNonGaiaEntities: () => ids.slice().reverse()
+        };
+        if (id !== 0 && component === IID_Position)
+            return {IsInWorld: () => true, GetPosition: () => ({x:18,z:18})};
+        return oldQuery(id, component);
+    };
+    result = get();
+    assert(result.truncated && result.objects.length === 2000, "Visible object cap");
+    assert(result.objects[0].id === 100 && result.objects[1999].id === 2099, "Capped objects not sorted");
+    assert(result.objects[0].resource.max === null, "Infinite capacity is not JSON-safe");
+    ids = ids.slice(0, 2000);
+    result = get();
+    assert(!result.truncated && result.objects.length === 2000, "Exact cap falsely truncated");
+    document.getElementById("result").textContent = "PASS: visible-only terrain and objects, explicit projection, remembered-coordinate LOS, bounds, validation, map borders, unchanged serialization, visible-only cap and no hidden count leakage";
+} catch (error) {
+    document.getElementById("result").textContent = "FAIL: " + error.stack;
+}
+</script>

@@ -1,0 +1,115 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>MCP session bridge coexistence contract</title>
+<pre id="result">RUNNING</pre>
+<script>
+var g_Settings = {};
+var g_IsObserver = false;
+var g_IsReplay = false;
+var g_ViewedPlayer = 1;
+function onTick() {}
+const sessions = ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"];
+const files = new Map();
+const commands = [];
+const accesses = [];
+let activeSession = sessions[0];
+let player = 1;
+const states = {
+    10: {id: 10, player: 1, template: "units/one", position: {x: 20,z: 20},
+        identity: {classes: ["Unit"]}, speed: {walk: 8}, unitAI: {isIdle: true}},
+    20: {id: 20, player: 2, template: "units/two", position: {x: 80,z: 80},
+        identity: {classes: ["Unit"]}, speed: {walk: 8}, unitAI: {isIdle: true}}
+};
+const Engine = {
+    ConfigDB_GetValue: () => activeSession,
+    GetPlayerID: () => player,
+    GuiInterfaceCall: (name, id) => {
+        if (name === "IsMapRevealed") return false;
+        if (name === "GetPlayerEntities") return [player * 10];
+        if (name === "GetEntityState") return states[id];
+        if (name === "MCPGetEntityProperties") return {version: 1};
+        if (name === "GetStartedResearch") return {};
+        if (name === "MCPGetOwnTerritoryPercent") return 10;
+        if (name === "GetSimulationState") return {timeElapsed: 1000, mapSize: 512,
+            players: [null,
+                {resourceCounts: {food: 111}, popCount: 1, popLimit: 10},
+                {resourceCounts: {food: 222}, popCount: 1, popLimit: 10}]};
+        throw new Error("Unexpected query: " + name);
+    },
+    FileExists: path => { accesses.push(["exists",path]); return files.has(path); },
+    ReadJSONFile: path => { accesses.push(["read",path]); return files.get(path); },
+    WriteJSONFile: (path, value) => {
+        accesses.push(["write",path]);
+        files.set(path, JSON.parse(JSON.stringify(value)));
+    },
+    PostNetworkCommand: command => commands.push({player, command})
+};
+</script>
+<script src="../mcp_player/gui/session/zz_mcp_player.js"></script>
+<script>
+try {
+    const assert = (value, message) => { if (!value) throw new Error(message); };
+    // Two independent game contexts share the same virtual files here. Each
+    // bridge retains its own acknowledgement state, as real GUI contexts do.
+    const first = Object.create(MCPPlayerBridge);
+    const second = Object.create(MCPPlayerBridge);
+    first.interval = second.interval = 0;
+    const select = (index) => {
+        activeSession = sessions[index];
+        player = g_ViewedPlayer = index + 1;
+        return index ? second : first;
+    };
+    const tick = index => select(index).tick();
+    const commandPath = index => "moddata/mcp_player/" + sessions[index] + "/command.json";
+    const observationPath = index => "moddata/mcp_player/" + sessions[index] + "/observation.json";
+    const issue = (index, extra) => files.set(commandPath(index), Object.assign({
+        version: 1, session: sessions[index], id: "same-command-id", action: "move",
+        entities: [(index + 1) * 10], x: 30 + index, z: 35 + index
+    }, extra));
+    issue(0);
+    issue(1);
+    tick(0);
+    const original = JSON.stringify(files.get(observationPath(0)));
+    tick(1);
+    assert(files.size === 4, "Shared/legacy files were used");
+    assert(original === JSON.stringify(files.get(observationPath(0))), "Second bridge overwrote first observation");
+    for (const index of [0,1]) {
+        const current = files.get(observationPath(index));
+        assert(current.available && current.session === sessions[index], "Observation session changed");
+        assert(current.player_id === index + 1 && current.resources.food === (index + 1) * 111,
+            "Observation crossed player economy");
+        assert(current.own_entities.length === 1 && current.own_entities[0].owner === index + 1,
+            "Observation crossed owned entities");
+        assert(current.last_action.ok && current.last_action.id === "same-command-id",
+            "Independent acknowledgement was lost");
+    }
+    assert(commands.length === 2 && commands[0].player === 1 && commands[0].command.entities[0] === 10 &&
+        commands[1].player === 2 && commands[1].command.entities[0] === 20, "Commands crossed players");
+    tick(0); tick(1);
+    assert(commands.length === 2, "Independent duplicate suppression failed");
+    issue(0, {id: "foreign-session", session: sessions[1]});
+    tick(0);
+    assert(commands.length === 2, "Foreign envelope on local path was accepted");
+    issue(1, {id: "foreign-unit", entities: [10]});
+    tick(1);
+    assert(commands.length === 2 && !files.get(observationPath(1)).last_action.ok,
+        "Foreign owned unit was accepted");
+    const snapshot = JSON.stringify([...files]);
+    const accessCount = accesses.length;
+    for (const invalid of ["", null, 42, "test-session", "../escape", "a".repeat(31),
+        "a".repeat(33), "A".repeat(32), "a".repeat(31) + "/", "a".repeat(32) + "\n"]) {
+        activeSession = invalid;
+        first.tick();
+        onTick();
+        let rejected = false;
+        try { first.commandPath; } catch (error) { rejected = true; }
+        assert(rejected, "Invalid session generated a file path");
+    }
+    assert(accessCount === accesses.length && snapshot === JSON.stringify([...files]),
+        "Invalid session touched bridge files");
+    assert(commands.length === 2, "Invalid session posted a network command");
+    document.getElementById("result").textContent = "PASS: session-scoped paths, simultaneous shared-filesystem observations, independent acknowledgements/duplicate suppression, foreign command/unit rejection, invalid session no-I/O";
+} catch (error) {
+    document.getElementById("result").textContent = "FAIL: " + error.stack;
+}
+</script>

@@ -1,0 +1,250 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>MCP unit properties privacy contract</title>
+<pre id="result">RUNNING</pre>
+<script>
+const SYSTEM_ENTITY = 0;
+const IID_RangeManager = "range", IID_Ownership = "ownership", IID_Identity = "identity";
+const IID_ResourceGatherer = "gatherer", IID_Attack = "attack", IID_Pack = "pack";
+const IID_UnitAI = "unitAI", IID_Builder = "builder", IID_RallyPoint = "rally";
+const IID_TemplateManager = "templates", IID_Player = "player", IID_StatisticsTracker = "statistics";
+function GuiInterface() {}
+GuiInterface.prototype.exposedFunctions = {stock: 1};
+GuiInterface.prototype.Serialize = function() { return {stock: true}; };
+const originalSerialize = GuiInterface.prototype.Serialize;
+const states = new Map(), components = new Map(), owners = new Map(), visibility = new Map();
+const templates = new Map(), templateReads = [], playerReads = [];
+const players = new Map([[1, {GetPlayerID: () => 1}], [2, {GetPlayerID: () => 2}]]);
+const trackers = new Map([[1, {GetPercentMapControlled: () => 12.5}], [2, {GetPercentMapControlled: () => 99}]]);
+function QueryPlayerIDInterface(player, component) {
+    playerReads.push([player, component]);
+    return (component === IID_Player ? players : trackers).get(player) || null;
+}
+const stateReads = [], reads = [];
+const range = {GetLosVisibility: id => visibility.get(id) || "hidden"};
+function fixture(id, state, parts = {}, civ = "athen") {
+    state.id = id;
+    states.set(id, state);
+    owners.set(id, state.player);
+    visibility.set(id, "visible");
+    components.set(id, Object.assign({identity: {GetCiv: () => civ}}, parts));
+}
+GuiInterface.prototype.GetEntityState = function(player, id) {
+    stateReads.push(id);
+    if (owners.get(id) !== player && range.GetLosVisibility(id, player) !== "visible")
+        throw new Error("Hidden state read");
+    return states.get(id);
+};
+const Engine = {
+    QueryInterface: (id, component) => {
+        reads.push([id, component]);
+        if (id === 0 && component === IID_RangeManager) return range;
+        if (id === 0 && component === IID_TemplateManager) return {GetTemplate: name => {
+            templateReads.push(name);
+            return templates.get(name);
+        }};
+        if (component === IID_Ownership) return owners.has(id) ? {GetOwner: () => owners.get(id)} : null;
+        return components.has(id) ? components.get(id)[component] || null : null;
+    }
+};
+function ApplyValueModificationsToEntity(path, value, entity) {
+    return path.includes("/Bonuses/") ? value * 2 : value;
+}
+</script>
+<script src="../mcp_player/simulation/components/zy_mcp_properties.js"></script>
+<script>
+try {
+    const assert = (value, message) => {if (!value) throw new Error(message);};
+    const gui = new GuiInterface();
+    const props = id => gui.MCPGetEntityProperties(1, id);
+    fixture(10, {player: 2, template: "hidden", identity: {classes: ["Unit"]}});
+    visibility.set(10, "hidden");
+    fixture(20, {player: 2, template: "enemy", identity: {classes: ["Unit"]}});
+    templates.set("hidden", {Identity: {GenericName: "HIDDEN", SpecificName: "HIDDEN", Tooltip: "HIDDEN"}});
+    templates.set("enemy", {Identity: {GenericName: "Enemy Spearman", SpecificName: "敌方矛兵", Tooltip: "Visible public description.", Script: "SECRET"}});
+    templates.set("units/athen/support_civilian", {Identity: {GenericName: "Worker", SpecificName: "平民", Tooltip: "Builds and gathers.", Script: "SECRET"}});
+    fixture(30, {player: 1, template: "own", identity: {classes: ["Unit"]}});
+    fixture(31, {player: 1, template: "own-holder", identity: {classes: ["Structure"]}});
+    fixture(1, {
+        player: 1, template: "units/athen/support_civilian", builder: true,
+        identity: {classes: ["Unit", "Worker"], rank: "Basic"}, speed: {walk: 8},
+        unitAI: {state: "INDIVIDUAL.GATHER.GATHERING", isIdle: false, canGuard: false, canPatrol: true,
+            orders: [{type: "Gather", data: {target: 10, x: 900, z: 901, secret: "SECRET"}}, {type: "Attack", data: {target: 20}}]},
+        resourceCarrying: [{type: "food", amount: 7, max: 10, secret: "SECRET"}],
+        resourceGatherRates: {"food.grain": 0.6, "wood.tree": 0.7},
+        garrisonable: {holder: 31, size: 1}, private: "SECRET"
+    }, {
+        gatherer: {GetCapacity: () => 10},
+        builder: {GetEntitiesList: () => ["structures/athen/field", "structures/athen/house"], GetRate: () => 1.5},
+        unitAI: {GetStanceName: () => "defensive"}
+    });
+    let result = props(1);
+    assert(result.identity.name.generic === "Worker" && result.identity.name.specific === "平民" && result.identity.tooltip === "Builds and gathers.", "Own native identity labels missing");
+    assert(result.identity.translation === "source-language", "Simulation identity labels claimed localization");
+    const enemyIdentity = props(20).identity;
+    assert(enemyIdentity.name.generic === "Enemy Spearman" && enemyIdentity.tooltip === "Visible public description." && !JSON.stringify(enemyIdentity).includes("SECRET"), "Visible public identity labels missing or unprojected");
+    const beforeHiddenTemplate = templateReads.length;
+    for (const query of [() => props(10), () => gui.MCPProjectEntityProperties(1, states.get(10), true)]) {
+        let refused = false;
+        try {query();} catch (_) {refused = true;}
+        assert(refused && templateReads.length === beforeHiddenTemplate, "Hidden identity template was read before LOS authorization");
+    }
+    assert(result.version === 1 && result.capabilities.build && result.capabilities.repair && result.capabilities.farm, "Worker capabilities");
+    assert(result.gathering.rates["food.grain"] === 0.6 && result.gathering.capacities.food === 10, "Gathering data");
+    assert(result.construction.templates[0] === "structures/athen/field" && result.construction.rate === 1.5, "Construction data");
+    assert(result.inventory.resources[0].amount === 7 && result.inventory.resources[0].capacity === 10, "Carried resources");
+    assert(result.current_target.order === "Gather" && result.current_target.entity_id === null && result.current_target.position === null, "Hidden target ID/coordinates leaked");
+    assert(result.garrisoned_in.holder_id === 31 && result.activity.stance === "defensive", "Own activity/garrison");
+    assert(!JSON.stringify(result).includes("SECRET"), "Unprojected state leaked");
+    result.inventory.resources[0].amount = 999;
+    result.construction.templates[0] = "changed";
+    assert(states.get(1).resourceCarrying[0].amount === 7, "Raw input graph escaped");
+    states.get(1).unitAI.orders = [{type: "Walk", data: {x: 42, z: 43, target: 20}}];
+    result = props(1);
+    assert(result.current_target.entity_id === 20 && result.current_target.position.x === 42, "Visible target/positional order missing");
+    states.get(1).unitAI.orders = [{type: "Guard", data: {target: 30}}];
+    visibility.set(30, "hidden");
+    assert(props(1).current_target.entity_id === 30, "Known own target missing");
+    let rallyPositions = [{x: 42, z: 43}, {x: 44, z: 45}];
+    let rallyData = [{command: "attack", target: 10, allowCapture: true, secret: "SECRET"},
+                     {command: "garrison", target: 31}];
+    components.get(31).rally = {GetPositions: () => rallyPositions, GetData: () => rallyData};
+    const beforeRally = stateReads.length;
+    result = props(31).rally_point;
+    assert(result.points[0].order === "capture" && result.points[0].entity_id === null &&
+        result.points[0].position.x === 42 && result.points[1].entity_id === 31 && !result.truncated,
+        "Rally queue missing or hidden target ID leaked");
+    assert(stateReads.length === beforeRally + 1 && !JSON.stringify(result).includes("SECRET"),
+        "Rally projection read target state or leaked raw data");
+    result.points[0].position.x = 999;
+    assert(rallyPositions[0].x === 42, "Rally position graph escaped");
+    rallyPositions = Array.from({length: 101}, () => ({x: 5, z: 6}));
+    rallyData = [{command: "unrecognized"}];
+    result = props(31).rally_point;
+    assert(result.points.length === 100 && result.truncated && result.points[0].order === "unsupported" &&
+        result.points[1].order === "move", "Rally bound/default mapping failed");
+    components.get(31).rally.GetData = () => {throw new Error("Public rally data read");};
+    assert(gui.MCPProjectEntityProperties(1, states.get(31), true).rally_point === null,
+        "Public map included own rally queue");
+    delete components.get(31).rally;
+    const beforeHidden = stateReads.length;
+    let rejected = false;
+    try {props(10);} catch (_) {rejected = true;}
+    assert(rejected && stateReads.length === beforeHidden, "Hidden enemy state read");
+    for (const player of [-1, 0, 9, true]) {
+        rejected = false;
+        try {gui.MCPGetEntityProperties(player, 1);} catch (_) {rejected = true;}
+        assert(rejected, "Invalid player accepted");
+    }
+    const bonus = {Damage: {Pierce: 12}, Capture: 0,
+        ApplyStatus: {poison: {Duration: 3600, Interval: 600, Stackability: "Extend", Damage: {Poison: 2}, hidden: "SECRET"}},
+        Bonuses: {Cavalry: {Classes: "Cavalry", Civ: "rome", Multiplier: "3"}},
+        minRange: 0, maxRange: 60, prepareTime: 500, repeatTime: 1500,
+        splash: {shape: "Circular", radius: 4, friendlyFire: true, Damage: {Crush: 20}}};
+    fixture(2, {player: 1, template: "units/athen/spearman", identity: {classes: ["Unit", "Soldier"]},
+        attack: {Ranged: bonus}, resistance: {Damage: {Hack: 2, Pierce: 3}, Capture: 4,
+            ApplyStatus: {poison: {duration: 0.5, blockChance: 1, hidden: "SECRET"}}}},
+        {attack: {GetRestrictedClasses: () => ["Structure+!Wall"], GetPreferredClasses: () => ["Cavalry"]}});
+    result = props(2);
+    assert(result.combat.can_attack && result.combat.attacks.Ranged.bonuses[0].multiplier === 6, "Modified combat bonus");
+    assert(result.combat.attacks.Ranged.restricted_classes[0] === "Structure+!Wall" && result.combat.attacks.Ranged.splash.damage.Crush === 20, "Restriction/splash data");
+    assert(result.combat.resistance.damage.Pierce === 3, "Resistance data");
+    assert(result.combat.attacks.Ranged.status_effects[0].duration_ms === 3600 &&
+        result.combat.attacks.Ranged.status_effects[0].interval_ms === 600 &&
+        result.combat.attacks.Ranged.status_effects[0].damage.Poison === 2 &&
+        result.combat.attacks.Ranged.status_effects[0].stackability === "Extend", "Periodic special damage missing or modified twice");
+    assert(result.combat.resistance.status_effects.poison.block_chance === 1 &&
+        result.combat.resistance.status_effects.poison.duration_multiplier === 0.5, "Status immunity/resistance missing");
+    assert(!JSON.stringify(result).includes("SECRET"), "Raw status effect fields escaped");
+    fixture(3, {player: 1, template: "units/athen/support_healer", identity: {classes: ["Unit", "Healer"]},
+        heal: {health: 10, range: 30, interval: 1000, healableClasses: "Organic", unhealableClasses: "Mechanical"}});
+    result = props(3);
+    assert(result.capabilities.heal && !result.capabilities.attack && result.combat.healing.health === 10, "Nonattacking healer");
+    fixture(4, {player: 1, template: "units/brit/war_dog", identity: {classes: ["Unit", "Dog"]}}, {}, "brit");
+    assert(props(4).identity.special_roles[0] === "war_dog", "Briton war dog tag");
+    fixture(5, {player: 1, template: "units/han/support_minister", identity: {classes: ["Unit", "Minister"]},
+        attack: {Capture: {Capture: 4, maxRange: 3, repeatTime: 1000}},
+        auras: {"units/han_minister_building": {name: {generic: "Imperial supervision"}, description: "Build faster.", radius: 30}}}, {}, "han");
+    result = props(5);
+    assert(result.identity.special_roles[0] === "minister" && !result.combat.can_attack && result.combat.can_capture && result.capabilities.capture && result.combat.auras[0].range === 30, "Minister capability/aura");
+    fixture(9, {player: 1, template: "units/special", identity: {classes: ["Unit", "Champion", "Mercenary", "Hero"]}});
+    assert(props(9).identity.special_roles.join() === "champion,mercenary,hero", "Champion/mercenary/hero tags");
+    fixture(6, {player: 1, template: "units/maur/support_elephant", identity: {classes: ["Unit", "Support", "Elephant"]},
+        builder: true, resourceDropsite: {types: ["food", "wood", "stone", "metal"]}},
+        {builder: {GetEntitiesList: () => [], GetRate: () => 2}}, "maur");
+    result = props(6);
+    assert(result.identity.special_roles[0] === "worker_elephant" && result.capabilities.build && !result.capabilities.gather && result.storage.accepts.length === 4, "Worker elephant mobile dropsite");
+    fixture(7, {player: 1, template: "units/ship", identity: {classes: ["Unit", "Ship"]},
+        garrisonHolder: {capacity: 20, allowedClasses: "Infantry+!Hero Support", occupiedSlots: 3, entities: [30, 20, 10]},
+        trader: {goods: {type: "metal", amount: {traderGain: 15, market1Gain: 3, market2Gain: 5, market1Owner: 2, secret: "SECRET"}}}});
+    result = props(7);
+    assert(result.garrison.capacity === 20 && result.garrison.occupants.join() === "30" && result.garrison.allowed_classes[0] === "Infantry+!Hero", "Owned garrison list/class expression");
+    assert(result.inventory.trade_goods.trader_gain === 15 && result.inventory.trade_goods.market2_gain === 5, "Structured trader gain");
+    assert(!JSON.stringify(result).includes("market1Owner") && !JSON.stringify(result).includes("SECRET"), "Trader private extras leaked");
+    for (const [packed, changing, expected] of [[true,false,"packed"], [false,false,"unpacked"], [true,true,"unpacking"], [false,true,"packing"]]) {
+        fixture(8, {player: 1, template: "units/siege", identity: {classes: ["Unit", "Siege"]}},
+            {pack: {IsPacked: () => packed, IsPacking: () => changing, GetProgress: () => 0.25}});
+        assert(props(8).packing.state === expected && props(8).packing.progress === 0.25, "Packing state " + expected);
+    }
+    const ownPublic = gui.MCPProjectEntityProperties(1, states.get(1), true);
+    assert(ownPublic.inventory === null && ownPublic.current_target === null && ownPublic.activity === null && ownPublic.construction === null && ownPublic.garrisoned_in === null, "Own public map carried private fields");
+    states.get(7).player = 2; owners.set(7, 2);
+    result = props(7);
+    assert(result.inventory === null && result.activity === null && result.current_target === null && result.garrison.occupied_slots === null && result.garrison.occupants === null, "Visible opponent private fields leaked");
+    assert(result.garrison.capacity === 20, "Opponent public capacity missing");
+    templates.set("structures/athen/civic_centre", {BuildRestrictions: {
+        PlacementType: "land", Territory: "own", Category: "CivilCentre",
+        Distance: {FromClass: "CivilCentre", MinDistance: "120", MaxDistance: "500"}
+    }});
+    fixture(40, {player: 1, template: "structures/athen/civic_centre", identity: {classes: ["Structure", "CivilCentre"]},
+        hitpoints: 850, maxHitpoints: 1000, capturePoints: [0, 400, 100], maxCapturePoints: 500,
+        researcher: {technologies: ["phase_town", undefined, {pair: true, top: "armor_a", bottom: "armor_b"}], techCostMultiplier: {time: 0.9, food: 1}},
+        trainer: {entities: ["units/athen/support_female_citizen"]},
+        production: {queue: [{id: 1, unitTemplate: "units/athen/support_female_citizen", count: 3, progress: 0.25, timeRemaining: 7500,
+                            paused: false, metadata: "SECRET"},
+                           {id: 2, templateName: "phase_town", count: 1, progress: 0.5, timeRemaining: 12000,
+                            paused: true, metadata: "SECRET"}], autoqueue: true},
+        buildingAI: {defaultArrowCount: 3, maxArrowCount: 10, garrisonArrowMultiplier: 0.5, garrisonArrowClasses: "Infantry+Ranged", arrowCount: 5},
+        garrisonHolder: {capacity: 20, allowedClasses: "Infantry", occupiedSlots: 2, entities: [30]},
+        foundation: {numBuilders: 2, buildTime: {timeRemaining: 10, timeRemainingNew: 8}},
+        repairable: {numBuilders: 1, buildTime: {timeRemaining: 5, timeRemainingNew: 3}},
+        auras: {"structures/temple": {name: {generic: "Healing"}, description: "Heal nearby units.", radius: 20}}});
+    result = props(40);
+    assert(result.building.owner === 1 && result.building.hitpoints === 850 && result.building.loyalty.current[2] === 100, "Building owner, health, loyalty");
+    assert(result.building.research.technologies.join() === "phase_town" && result.building.research.pairs[0].top === "armor_a", "Research pair discarded");
+    assert(result.building.training.entities[0] === "units/athen/support_female_citizen" && result.building.production.queue[0].count === 3 && result.building.production.autoqueue, "Building production lists/queue");
+    assert(result.building.production.queue[1].technology_template === "phase_town" && result.building.production.queue[1].unit_template === "", "Native technology templateName fallback");
+    assert(result.building.building_ai.arrows === 5 && result.building.building_ai.garrison_arrow_classes[0] === "Infantry+Ranged", "Building arrows");
+    assert(result.building.placement.distance.min === 120 && result.building.placement.distance.max === 500, "Template numeric strings in building placement");
+    assert(result.building.foundation.time_remaining_seconds === 10 && result.building.repair.time_remaining_with_one_more_worker_seconds === 3, "Native work-time object lost");
+    assert(result.combat.auras[0].id === "structures/temple" && result.garrison.occupants.join() === "30", "Shared building capabilities");
+    assert(!JSON.stringify(result).includes("SECRET"), "Production metadata leaked");
+    const publicBuilding = gui.MCPProjectEntityProperties(1, states.get(40), true);
+    assert(publicBuilding.building.production === null && publicBuilding.building.foundation === null && publicBuilding.building.repair === null, "Public building private work/production leaked");
+    assert(publicBuilding.building.hitpoints === 850 && publicBuilding.building.loyalty.current[1] === 400 && publicBuilding.garrison.occupants === null, "Public building safe observation missing");
+    templates.set("structures/athen/dock", {BuildRestrictions: {PlacementType: "shore", Territory: "own ally neutral", Category: "Dock"}});
+    fixture(41, {player: 1, template: "structures/athen/dock", identity: {classes: ["Structure"]}});
+    assert(props(41).building.placement.territory.join() === "own,ally,neutral", "Dock neutral building restriction");
+    fixture(42, {player: 1, template: "structures/athen/field", identity: {classes: ["Structure", "Field"]},
+        resourceSupply: {isInfinite: true, type: {generic: "food", specific: "grain"}, amount: Infinity, max: Infinity, maxGatherers: 5, numGatherers: 2}});
+    const field = props(42).building.resource;
+    assert(field.infinite && field.amount === null && field.max === null && field.gatherers === 2, "Infinite field supply");
+    assert(gui.MCPProjectEntityProperties(1, states.get(42), true).building.resource.gatherers === null, "Public field worker count leaked");
+    const percent = gui.MCPGetOwnTerritoryPercent(1, {player: 2});
+    assert(percent === 12.5 && playerReads.every(item => item[0] === 1), "Territory query selected another player's tracker");
+    for (const player of [-1, 0, 9, true, "1"]) {
+        const before = playerReads.length;
+        rejected = false;
+        try {gui.MCPGetOwnTerritoryPercent(player);} catch (_) {rejected = true;}
+        assert(rejected && playerReads.length === before, "Invalid player read territory statistics");
+    }
+    trackers.set(1, {GetPercentMapControlled: () => Infinity});
+    assert(gui.MCPGetOwnTerritoryPercent(1) === null, "Non-finite territory value escaped");
+    assert(!stateReads.includes(10), "A hidden target was dereferenced");
+    assert(GuiInterface.prototype.Serialize === originalSerialize && JSON.stringify(gui.Serialize()) === '{"stock":true}', "Simulation serialization changed");
+    assert(GuiInterface.prototype.exposedFunctions.stock && GuiInterface.prototype.exposedFunctions.MCPGetEntityProperties && GuiInterface.prototype.exposedFunctions.MCPGetOwnTerritoryPercent && !GuiInterface.prototype.exposedFunctions.MCPProjectEntityProperties, "Exposed query surface incorrect");
+    document.getElementById("result").textContent = "PASS: entity and building capabilities, research pairs, production privacy, native work estimates, loyalty, arrows, dock placement, infinite fields, own territory statistics, target visibility, combat, special roles, garrison, trade, packing, read-only serialization";
+} catch (error) {
+    document.getElementById("result").textContent = "FAIL: " + error.stack;
+}
+</script>

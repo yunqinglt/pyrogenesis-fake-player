@@ -1,0 +1,93 @@
+{
+  "schema_version": 2,
+  "purpose": "Install and check an ordinary-player 0 A.D. MCP, then join only the user-provided match",
+  "target": {"game": "0 A.D.", "game_version": "0.28.0", "tested_platform": "Windows x64; Linux x64/WSL2 (installation, stdio and ENet only)", "supported_platforms": ["Windows", "Linux"], "linux_gameplay_verified": false, "python_minimum": "3.11", "mcp_transport": "stdio"},
+  "platform_selection_rule": "Top-level install/check/mcp_server describe Windows. On Linux replace each whole object with platform_overrides.linux's corresponding object BEFORE executing anything. Do not run the Windows commands on Linux.",
+  "variables": {
+    "BUNDLE": "absolute extracted server directory on this machine",
+    "PYTHON": "absolute Python 3.11+ executable; architecture must match ENet",
+    "GAME": "absolute 0 A.D. 0.28.0 executable; binaries/system/pyrogenesis.exe on Windows or native pyrogenesis on Linux",
+    "ENET": "absolute enet.dll from the same Windows installation, or compatible Linux libenet.so.*",
+    "PUBLIC_MOD": "Linux public mod directory, public.zip or mod.json from the selected game installation",
+    "USER_NICKNAME": "distinct nickname assigned to this model, 1..32 characters, not all whitespace and without control characters"
+  },
+  "placeholder_rule": "Expand these named placeholders in argument arrays; do not execute them as literal paths or interpolate untrusted shell strings. USER_UDP_PORT must become an integer in the actual MCP arguments, not a string.",
+  "install": {
+    "command": "powershell.exe",
+    "args": ["-NoProfile", "-File", "{BUNDLE}/install.ps1", "-PythonExe", "{PYTHON}"],
+    "network_required": true,
+    "dependency_constraints": "{BUNDLE}/constraints-tested.txt",
+    "expected_exit_code": 0,
+    "writes": ["{BUNDLE}/.venv", "{BUNDLE}/build", "{BUNDLE}/src/pyrogenesis_fair_player_portable.egg-info", "Python package manager cache"]
+  },
+  "check": {
+    "command": "{BUNDLE}/.venv/Scripts/python.exe",
+    "args": ["{BUNDLE}/check_portable.py", "--check-game"],
+    "env": {"PYROGENESIS_EXE": "{GAME}", "PYROGENESIS_ENET_DLL": "{ENET}"},
+    "expected_exit_code": 0,
+    "expected": {"ok": true, "stdio.tool_count": 24, "stdio.idle_status.running": false},
+    "game_launch": false,
+    "manual_check": "If native_files.game_version_verified is false, confirm 0.28.0 manually; never stop an existing host to read locked metadata."
+  },
+  "mcp_server": {
+    "command": "{BUNDLE}/.venv/Scripts/python.exe",
+    "args": ["-m", "pyrogenesis_mcp.server"],
+    "cwd": "{BUNDLE}",
+    "env": {"PYROGENESIS_EXE": "{GAME}", "PYROGENESIS_ENET_DLL": "{ENET}"},
+    "stdout": "MCP protocol only",
+    "lifetime": "One persistent server and controlled game; stopping the server closes its owned game processes."
+  },
+  "platform_overrides": {
+    "linux": {
+      "instructions": "Read LINUX.md. Prepare Python 3.11+ with venv/pip, 0 A.D. 0.28.0, ENet 1.3 and a working graphical desktop. No sudo or OS package installation is performed by the bundle.",
+      "install": {
+        "command": "bash",
+        "args": ["{BUNDLE}/install.sh", "--python", "{PYTHON}"],
+        "network_required": true,
+        "dependency_constraints": "{BUNDLE}/constraints-tested.txt",
+        "expected_exit_code": 0,
+        "writes": ["{BUNDLE}/.venv", "{BUNDLE}/build", "{BUNDLE}/src/pyrogenesis_fair_player_portable.egg-info", "Python package manager cache"]
+      },
+      "check": {
+        "command": "{BUNDLE}/.venv/bin/python",
+        "args": ["{BUNDLE}/check_portable.py", "--check-game"],
+        "env": {"PYROGENESIS_EXE": "{GAME}", "PYROGENESIS_ENET_LIBRARY": "{ENET}", "PYROGENESIS_PUBLIC_MOD": "{PUBLIC_MOD}"},
+        "expected_exit_code": 0,
+        "expected": {"ok": true, "stdio.tool_count": 24, "stdio.idle_status.running": false, "native_files.game_version_verified": true},
+        "game_launch": false,
+        "manual_check": "The display availability flag only checks environment variables. It does not prove graphics or gameplay works. PUBLIC_MOD affects this check, not the game data search path."
+      },
+      "mcp_server": {
+        "command": "{BUNDLE}/.venv/bin/python",
+        "args": ["-m", "pyrogenesis_mcp.server"],
+        "cwd": "{BUNDLE}",
+        "env": {"PYROGENESIS_EXE": "{GAME}", "PYROGENESIS_ENET_LIBRARY": "{ENET}"},
+        "inherit_environment": ["DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "XDG_DATA_HOME", "HOME", "PATH"],
+        "stdout": "MCP protocol only",
+        "lifetime": "One persistent server; stopping it closes its owned game processes."
+      }
+    }
+  },
+  "player_documents": ["player-kit/ENTRYPOINT.md", "player-kit/AGENT.md", "player-kit/MCP.md"],
+  "connection_flow": [
+    {"tool": "player_status", "arguments": {}},
+    {"if": "not connected and user supplied host/port", "tool": "join_lan_game", "arguments": {"host": "{USER_HOST}", "port": "{USER_UDP_PORT}", "nickname": "{USER_NICKNAME}"}},
+    {"tool": "player_status", "until": "ready=true after host assigns a seat and starts"},
+    {"tool": "observe_player", "arguments": {}, "use_actual_player_and_entity_ids": true}
+  ],
+  "nickname_rule": "nickname and legacy player_name are optional aliases; omitting both uses MCP Player. If both are supplied they must match exactly. Validate 1..32 characters, not all whitespace and without control characters before launching a game. A nickname does not select a player seat.",
+  "multi_instance": {
+    "topology": "one model -> one persistent MCP process -> one controlled game client -> one host-assigned player seat",
+    "shared_room": "Distinct instances may join the same host and game UDP port with different nicknames; internal relay ports are allocated separately.",
+    "automatic_isolation": ["per-session bridge: user mods/user/moddata/mcp_player/{session32hex}", "private companion mod: mcp_player_{session32hex}", "Windows per-session temporary runtime and separate host/player ZIP files"],
+    "windows_template": "A shared template cache is protected during construction by an interprocess lock. New code does not launch that template directly; it copies it into the current session's private runtime.",
+    "operator_setup": "Use distinct server processes; no manual instance ID or PYROGENESIS_MODS_DIR override is needed. Reusing an installation is allowed. Reusing one server connection still controls one player.",
+    "shutdown": "Close only the current service's controlled processes and clean its own private runtime directories. Preserve other instances and user manual hosts.",
+    "limits": ["some GUI settings and crash filenames may remain shared", "process/session isolation is not an OS security sandbox", "gameplay acceptance depends on actual platform and match tests"],
+    "acceptance_record": "player-kit/docs/validation.md"
+  },
+  "gameplay_boundary": "Dynamic observations and actions only through public MCP tools. Do not read hidden bridge files, saves or memory for gameplay.",
+  "terminal_result_guidance": "Only outcome won or defeated is a confirmed player result. ready=false, disconnection, or outcome unknown alone does not mean defeat.",
+  "stop_conditions": ["missing game/version/architecture prerequisite", "stdio self-check fails", "user has not supplied match authorization/address"],
+  "preserve": ["user manual host", "unrelated MCP configuration", "existing controlled game session unless user ends it"]
+}

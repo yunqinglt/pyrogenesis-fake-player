@@ -1,0 +1,8 @@
+{
+  "name": "mcp_player",
+  "version": "0.3.0",
+  "label": "MCP Player Companion",
+  "description": "Structured entity properties, own-player economy, player-LOS map queries, and validated movement for MCP.",
+  "dependencies": ["0ad>=0.0.28"],
+  "ignoreInCompatibilityChecks": true
+}

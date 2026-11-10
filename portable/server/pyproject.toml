@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyrogenesis-fair-player-portable"
+version = "0.1.0"
+description = "Portable ordinary-player MCP server for 0 A.D. 0.28.0"
+requires-python = ">=3.11"
+dependencies = ["mcp>=1.20,<2"]
+
+[project.scripts]
+pyrogenesis-mcp = "pyrogenesis_mcp.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["pyrogenesis_mcp*"]
+
+[tool.setuptools.package-data]
+pyrogenesis_mcp = ["companion/**/*"]

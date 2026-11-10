@@ -1,0 +1,137 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>MCP bounded unit commands contract</title>
+<pre id="result">RUNNING</pre>
+<script>
+function onTick() {}
+const commands = [], reads = [], guards = [], canAttackCalls = [], states = new Map();
+const common = {position:{x:20,z:20}, speed:{walk:8}, unitAI:{isIdle:true}, attack:{Melee:{},Capture:{}},
+    resourceGatherRates:{"wood.tree":0.7}, builder:true, garrisonable:{size:1},
+    mcpProperties:{construction:{templates:["structures/athen/house"]}}};
+const worker = Object.assign({id:1,player:1,identity:{classes:["Unit","Worker"],canDelete:true}}, common);
+const soldier = Object.assign({id:2,player:1,identity:{classes:["Unit","Soldier"],canDelete:true}}, common);
+const building = {id:3,player:1,identity:{classes:["Structure"],canDelete:true},needsRepair:true,
+    garrisonHolder:{capacity:10,occupiedSlots:0},hitpoints:80,capturePoints:[0,200,0]};
+const enemy = {id:10,player:2,visibility:"visible",identity:{classes:["Structure"]},hitpoints:200,capturePoints:[0,0,200]};
+const resource = {id:11,player:0,visibility:"visible",resourceSupply:{amount:500,type:{generic:"wood",specific:"tree"}}};
+const hidden = {id:12,player:2,visibility:"hidden",hitpoints:777,capturePoints:[0,0,777]};
+const mirage = {id:13,player:2,visibility:"visible",mirage:true,hitpoints:777};
+for (const state of [worker,soldier,building,enemy,resource,hidden,mirage]) states.set(state.id,state);
+let canAttack = true;
+const Engine = {
+    GetPlayerID: () => 1,
+    ConfigDB_GetValue: () => "55555555555555555555555555555555",
+    GuiInterfaceCall: (name,arg) => {
+        if (name === "MCPGetEntityProperties") {
+            guards.push(arg);
+            const state = states.get(arg);
+            if (!state || state.player !== 1 && state.visibility !== "visible") throw new Error("Target unavailable");
+            return {};
+        }
+        if (name === "GetEntityState") {
+            reads.push(arg);
+            if (!guards.includes(arg)) throw new Error("Target read without LOS authorization");
+            return states.get(arg);
+        }
+        if (name === "CanAttack") { canAttackCalls.push(arg); return canAttack; }
+        throw new Error("Unexpected GUI call: " + name);
+    },
+    PostNetworkCommand: command => commands.push(JSON.parse(JSON.stringify(command)))
+};
+</script>
+<script src="../mcp_player/gui/session/zz_mcp_player.js"></script>
+<script>
+try {
+    const assert = (condition,message) => {if (!condition) throw new Error(message);};
+    let counter = 0;
+    const issue = (action,extra={},owned=[worker,soldier,building]) => MCPPlayerBridge.execute(
+        Object.assign({version:1,session:"55555555555555555555555555555555",id:String(++counter),action},extra), owned, 512);
+    const rejected = (action,extra,message,owned) => {
+        const before = commands.length;
+        let failed = false;
+        try {issue(action,extra,owned);} catch (_) {failed = true;}
+        assert(failed && commands.length === before,message);
+    };
+    issue("orders",{entities:[1],orders:[{type:"attack",target:10},{type:"capture",target:10}],queued:false});
+    assert(commands.length === 2 && commands[0].type === "attack" && commands[0].allowCapture === false &&
+        commands[0].queued === false && commands[1].allowCapture === true && commands[1].queued === true,
+        "Attack/capture sequence or queue semantics failed");
+    assert(canAttackCalls.length === 2 && canAttackCalls.every(call => call.entity === 1 && call.target === 10),
+        "CanAttack was not limited to the selected owned attacker");
+    assert(commands.every(cmd => cmd.formation === "special/formations/null" && cmd.pushFront === false),"Formation was introduced");
+    issue("orders",{entities:[1],orders:[{type:"gather",target:11}],queued:true});
+    assert(commands[2].type === "gather" && commands[2].queued === true,"Append gather failed");
+    issue("orders",{entities:[1],orders:[{type:"repair",target:3},{type:"garrison",target:3}]});
+    assert(commands[3].type === "repair" && commands[3].autocontinue && commands[4].type === "garrison", "Repair/garrison failed");
+    issue("orders",{entities:[1],orders:[{type:"build",template:"structures/athen/house",x:30,z:40,angle:1}]});
+    assert(commands[5].type === "construct" && commands[5].template === "structures/athen/house" &&
+        commands[5].autorepair && commands[5].autocontinue && commands[5].angle === 1,"Construction mapping failed");
+    const beforeHiddenReads = reads.length;
+    rejected("orders",{entities:[1],orders:[{type:"attack",target:12}]},"Hidden target accepted");
+    assert(reads.length === beforeHiddenReads,"Hidden target state read before LOS guard");
+    rejected("orders",{entities:[1],orders:[{type:"attack",target:13}]},"Mirage target accepted");
+    rejected("orders",{entities:[1],orders:[{type:"gather",target:11},{type:"attack",target:12}]},"Partial command list executed before validation");
+    rejected("orders",{entities:[1],orders:[{type:"attack",target:1}]},"Self target accepted");
+    rejected("orders",{entities:[1],orders:[{type:"attack",target:3}]},"Own attack target accepted");
+    rejected("orders",{entities:[1],orders:[{type:"repair",target:10}]},"Enemy repair target accepted");
+    rejected("orders",{entities:[1],orders:[{type:"garrison",target:10}]},"Enemy garrison target accepted");
+    rejected("orders",{entities:[1],orders:[{type:"gather",target:10}]},"Nonresource gather accepted");
+    rejected("orders",{entities:[1],orders:[{type:"build",template:"units/athen/soldier",x:30,z:40}]},"Nonbuilding template accepted");
+    rejected("orders",{entities:[1],orders:[{type:"build",template:"structures/athen/barracks",x:30,z:40}]},"Unavailable builder template accepted");
+    rejected("orders",{entities:[1],orders:[{type:"build",template:"structures/athen/house",x:513,z:40}]},"Out of map build accepted");
+    rejected("orders",{entities:[1],orders:[{type:"build",template:"structures/athen/house",x:30,z:40,angle:Infinity}]},"Nonfinite angle accepted");
+    rejected("orders",{entities:[1],orders:[{type:"reveal-map",target:10}]},"Arbitrary native command accepted");
+    rejected("orders",{entities:[1],orders:[{type:"attack",target:10,allowCapture:true}]},"Raw order fields accepted");
+    rejected("orders",{entities:[1],orders:[{type:"attack",target:10}],queued:"true"},"Nonboolean queue accepted");
+    rejected("orders",{entities:[1],orders:Array(101).fill({type:"attack",target:10})},"Unbounded order list accepted");
+    rejected("orders",{entities:[10],orders:[{type:"attack",target:3}]},"Foreign commanded unit accepted");
+    rejected("orders",{entities:[true],orders:[{type:"attack",target:10}]},"Boolean entity accepted");
+    const canAttackCount = canAttackCalls.length;
+    const foreignAttacker = Object.assign({}, soldier, {id:14, player:2});
+    rejected("orders",{entities:[14],orders:[{type:"attack",target:10}]},"Foreign attacker accepted",[foreignAttacker]);
+    assert(canAttackCalls.length === canAttackCount,"CanAttack queried for a non-owned attacker");
+    const noAttack = Object.assign({}, worker, {id:14, attack:null});
+    rejected("orders",{entities:[14],orders:[{type:"attack",target:10}]},"Attacker without attack capability accepted",[noAttack]);
+    assert(canAttackCalls.length === canAttackCount,"CanAttack queried before attacker capability/ownership validation");
+    canAttack = false;
+    rejected("orders",{entities:[1],orders:[{type:"attack",target:10}]},"Unable attacker accepted");
+    canAttack = true;
+    const rates = worker.resourceGatherRates;
+    worker.resourceGatherRates = {};
+    rejected("orders",{entities:[1],orders:[{type:"gather",target:11}]},"Incompatible gatherer accepted");
+    worker.resourceGatherRates = rates;
+    for (const stance of ["violent","aggressive","defensive","passive","standground","skittish"]) {
+        issue("stance",{entities:[1],stance});
+        assert(commands.at(-1).type === "stance" && commands.at(-1).name === stance,"Stance mapping failed");
+    }
+    rejected("stance",{entities:[1],stance:"flee"},"Invented stance accepted");
+    rejected("stance",{entities:[1],stance:"none"},"Script-only stance accepted");
+    issue("abandon_target",{entities:[1,2]});
+    assert(JSON.stringify(commands.slice(-2)) === JSON.stringify([
+        {type:"remove-guard",entities:[1,2]},
+        {type:"stop",entities:[1,2],queued:false}
+    ]),"Abandon did not remove persistent guard before clearing orders");
+    rejected("abandon_target",{entities:[1,10]},"Invalid abandon batch partially removed guards");
+    const beforeStop = commands.length;
+    issue("stop",{entities:[1,2]});
+    assert(commands.length === beforeStop + 1 && commands.at(-1).type === "stop" &&
+        commands.at(-1).queued === false,"Stop unexpectedly changed persistent guard bindings");
+    issue("destroy_own_units",{entities:[1]});
+    assert(commands.at(-1).type === "delete-entities" && commands.at(-1).entities[0] === 1,"Own unit delete failed");
+    issue("destroy_own_buildings",{entities:[3]});
+    assert(commands.at(-1).type === "delete-entities" && commands.at(-1).entities[0] === 3,"Own building delete failed");
+    rejected("destroy_own_units",{entities:[3]},"Building deleted through unit action");
+    rejected("destroy_own_buildings",{entities:[1]},"Unit deleted through building action");
+    rejected("destroy_own_buildings",{entities:[10]},"Opponent entity deleted");
+    worker.identity.canDelete = false;
+    rejected("destroy_own_units",{entities:[1]},"Undeletable unit deleted");
+    worker.identity.canDelete = true;
+    const originalPlayer = worker.player;
+    worker.player = 2;
+    rejected("destroy_own_units",{entities:[1]},"Stale own-state ownership accepted");
+    worker.player = originalPlayer;
+    document.getElementById("result").textContent = "PASS: bounded queued target lists, complete-list validation, normal attack/capture, current LOS guards, build/repair/gather/garrison, abandon, exact native stances, ownership/class-gated deletion";
+} catch (error) {
+    document.getElementById("result").textContent = "FAIL: " + error.stack;
+}
+</script>

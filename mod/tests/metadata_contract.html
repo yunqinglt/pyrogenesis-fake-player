@@ -1,0 +1,95 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>MCP native public option descriptions contract</title>
+<pre id="result">RUNNING</pre>
+<script>
+const queries = [], reads = [];
+const g_Players = [null, {civ:"ptol"}, {civ:"han"}];
+const technologyData = {
+    pair_unlock_civil_service_han: {reqs:[{civ:"han"}]},
+    civil_service_01: {name:{generic:"Efficient Bureaucracy",specific:"九卿"},description:"",tooltip:"大臣训练时间 -50%。",
+        requirementsTooltip:"城镇阶段解锁。",cost:{food:200,wood:200,time:40},reqs:[{techs:["phase_town"]}],
+        affects:["Minister"],modifications:[{value:"Cost/BuildTime",multiply:0.5}],secret:"SECRET"},
+    civil_service_02: {name:{generic:"Intensive Training",specific:"九卿"},tooltip:"大臣生命值 +50%。",
+        cost:{food:200,wood:200,time:40},reqs:[{techs:["phase_town"]}],
+        affects:["Minister"],modifications:[{value:"Health/Max",multiply:1.5}]}
+};
+const TechnologyTemplates = {Get:id => { reads.push(id); return {pair:"pair_unlock_civil_service_han"}; }};
+function GetTechnologyData(id,civ) { reads.push([id,civ]); return technologyData[id]; }
+function translateObjectKeys(data) { data.name.generic = "本地化 " + data.name.generic; }
+const Engine = {
+    GetEngineInfo: () => ({engine_version:"0.28.0",secret:"SECRET"}), GetCurrentLocale: () => "zh_CN",
+    GuiInterfaceCall: (name,arg) => {
+        queries.push([name,arg]);
+        if ("player" in arg)
+            throw new Error("Caller-selected player exposed");
+        if (name === "GetTemplateData")
+            return {name:{generic:"Minister",specific:"Guānlì"},tooltip:"Boost nearby workers.",cost:{food:100,metal:100,time:15,population:1},
+                requirements:{Techs:{_string:"phase_town"}},health:200,speed:{walk:7,run:10,acceleration:1},
+                visibleIdentityClasses:["Minister"],secret:"SECRET"};
+        if (name === "CheckTechnologyRequirements" || name === "AreRequirementsMet")
+            return true;
+        throw new Error("Unexpected metadata native query");
+    }
+};
+const producer = {id:10,player:2,template:"structures/han/ministry",maxHitpoints:3000,researcher:{technologies:[{pair:true,top:"civil_service_01",bottom:"civil_service_02"}],
+    techCostMultiplier:{food:0.5,time:0.5}}, trainer:{entities:["units/han/support_minister"]},
+    mcpProperties:{construction:{templates:["structures/han/ministry"]}}};
+</script>
+<script src="../mcp_player/gui/session/zy_mcp_metadata.js"></script>
+<script>
+try {
+    const assert = (value,message) => { if (!value) throw new Error(message); };
+    const request = (kind,ids=null,entity_id=10,state=producer) => MCPMetadata.describe(2,[state],{kind,ids,entity_id});
+    const reject = (kind,ids,entity_id=10,state=producer) => {
+        const before = queries.length + reads.length;
+        let failed = false;
+        try { request(kind,ids,entity_id,state); } catch (_) { failed = true; }
+        assert(failed && queries.length + reads.length === before,"Invalid request queried a native template");
+    };
+    const result = request("research");
+    assert(result.engine_version === "0.28.0" && result.locale === "zh_CN","Native source locale lost");
+    assert(result.options.length === 2 && result.options[0].name.specific === "九卿" && result.options[1].name.specific === "九卿","Same-name branch lost");
+    assert(result.options[0].id === "civil_service_01" && result.options[1].id === "civil_service_02","Unique ID lost");
+    assert(result.options[0].pair.position === "top" && result.options[0].pair.other === "civil_service_02" && result.options[1].pair.position === "bottom","Pair relationship lost");
+    assert(result.options[0].pair.requirements[0].civ === "han" && result.options[0].requirements_complete,"Pair own requirements lost");
+    assert(result.options[0].modifications[0].multiply === 0.5 && result.options[1].modifications[0].multiply === 1.5,"Structured native effects lost");
+    assert(result.options[0].cost.food === 100 && result.options[0].base_cost.food === 200 && result.options[0].cost.time === 20,"Producer modifiers lost");
+    assert(result.options[0].requirements[0].techs[0] === "phase_town" && result.options[0].requirements_met,"Native requirements lost");
+    assert(JSON.stringify(result).indexOf("SECRET") === -1,"Raw template data leaked");
+    const unit = request("training").options[0];
+    assert(unit.name.generic === "本地化 Minister" && unit.cost.metal === 100 && unit.stats.max_hitpoints === 200,"Native template/localization lost");
+    assert(unit.requirements.Techs._string === "phase_town","Native entity requirements lost");
+    assert(request("construction").options[0].id === "structures/han/ministry","Builder options lost");
+    const own = request("self").options[0];
+    assert(own.id === "structures/han/ministry" && own.stats.max_hitpoints === 3000,"Owned self identity/state missing");
+    const foundation = request("self",null,10,Object.assign({},producer,{template:"foundation|structures/han/ministry"}));
+    assert(foundation.options[0].id === "structures/han/ministry","Known foundation filter not normalized");
+    reject("self",null,10,Object.assign({},producer,{template:"private|structures/han/ministry"}));
+    for (const kind of ["research","training","construction","self"])
+        reject(kind,null,10,Object.assign({},producer,{player:1}));
+    reject("research",["not_advertised"]);
+    reject("research",["../secret"]);
+    reject("research",["civil_service_01","civil_service_01"]);
+    reject("research",Array(17).fill("civil_service_01"));
+    reject("research",[]);
+    reject("hidden",null);
+    reject("research",null,999);
+    const changed = JSON.parse(JSON.stringify(producer));
+    changed.researcher.technologies = ["civil_service_02"];
+    reject("research",["civil_service_01"],10,changed);
+    technologyData.civil_service_01.reqs = [{techs:["phase_town"],entities:[{class:"Town",number:3,check:"count",secret:"SECRET"}]},
+        {all:[{tech:"phase_city"},{any:[{civ:"han"},{civ:"ptol"}]}]}];
+    technologyData.civil_service_01.modifications = [{value:"Attack/Ranged/MinRange",add:-10,replace:"Infantry+!Hero"}];
+    const nested = request("research",["civil_service_01"]).options[0];
+    assert(nested.requirements[1].all[1].any[1].civ === "ptol" && !nested.requirements_complete,"Unknown requirement key was presented as complete");
+    assert(nested.modifications[0].add === -10 && nested.modifications[0].replace === "Infantry+!Hero","Effect expressions lost");
+    const many = JSON.parse(JSON.stringify(producer));
+    many.trainer.entities = Array.from({length:20},(_,index) => "units/han/test_" + index);
+    const bounded = request("training",null,10,many);
+    assert(bounded.options.length === 16 && bounded.total_available === 20 && bounded.truncated,"Default result not bounded");
+    document.getElementById("result").textContent = "PASS: native localized descriptions, own advertised options, same-name pair effects, producer costs, nested requirements, version, bounded projections and no template oracle";
+} catch (error) {
+    document.getElementById("result").textContent = "FAIL: " + error.stack;
+}
+</script>

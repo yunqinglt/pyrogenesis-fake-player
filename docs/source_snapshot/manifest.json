@@ -1,0 +1,137 @@
+{
+  "repository": "https://gitea.wildfiregames.com/0ad/0ad",
+  "tag": "v0.28.0",
+  "commit": "a2cae4d69f816e9e9d7eecb6bf88f762afc0c90d",
+  "retrieved_date": "2026-11-05",
+  "target_installed_version": "0.28.0",
+  "protocol_version": "0x01010019",
+  "serialization_version": "0.28.0",
+  "license": "Wildfire Games source headers retained: GPL-2.0-or-later, except source/lib/build_version.h MIT",
+  "files": {
+    "source/lib/build_version.h": {
+      "url": "https://gitea.wildfiregames.com/0ad/0ad/raw/tag/v0.28.0/source/lib/build_version.h",
+      "sha256": "56162bce126442f5adbad702736186aef33281f36b49b022210c3c2fc026f270",
+      "bytes": 2899
+    },
+    "tags.json": {
+      "url": "https://gitea.wildfiregames.com/api/v1/repos/0ad/0ad/tags?limit=10",
+      "sha256": "c8b99fbcd9ed999165dfbe0b62915cd349c2074ffca169237017785207302a6e",
+      "bytes": 4478
+    },
+    "source/ps/CStr.cpp": {
+      "url": "https://gitea.wildfiregames.com/0ad/0ad/raw/tag/v0.28.0/source/ps/CStr.cpp",
+      "sha256": "831c3c37f5826e1c3349e2e936936f2f5d4381092fe58540b75a3d95b0220160",
+      "bytes": 12655
+    },
+    "source/ps/Hashing.cpp": {
+      "url": "https://gitea.wildfiregames.com/0ad/0ad/raw/tag/v0.28.0/source/ps/Hashing.cpp",
+      "sha256": "bc3d0e66cdeb718f944b9a44db11dc8852fa11cfe290db4be4a121966c77d375",
+      "bytes": 2546
+    },
+    "source/network/NetClient.cpp": {
+      "url": "https://gitea.wildfiregames.com/0ad/0ad/raw/tag/v0.28.0/source/network/NetClient.cpp",
+      "sha256": "e64f1d5b00cae9fdad0644476332b1b7f57fbb6c194376e5d52c763fe08c5bf6",
+      "bytes": 32688
+    },
+    "source/network/NetClientTurnManager.cpp": {
+      "url": "https://gitea.wildfiregames.com/0ad/0ad/raw/tag/v0.28.0/source/network/NetClientTurnManager.cpp",
+      "sha256": "71532c07d5561238a4d2e0d3c601799857b29fda560f1c58b361316abec9e8a0",
+      "bytes": 5092
+    },
+    "source/network/NetEnet.cpp": {
+      "url": "https://gitea.wildfiregames.com/0ad/0ad/raw/tag/v0.28.0/source/network/NetEnet.cpp",
+      "sha256": "a52d8753015f00a4b5694e603f73043811d2ba6ec05bcb084bad539fb0a7f4de",
+      "bytes": 1891
+    },
+    "source/network/NetEnet.h": {
+      "url": "https://gitea.wildfiregames.com/0ad/0ad/raw/tag/v0.28.0/source/network/NetEnet.h",
+      "sha256": "ada1e61517f24ec770e48c6bb89664bc232bb88c00085d284b5b6be668e521a5",
+      "bytes": 1550
+    },
+    "source/network/NetHost.cpp": {
+      "url": "https://gitea.wildfiregames.com/0ad/0ad/raw/tag/v0.28.0/source/network/NetHost.cpp",
+      "sha256": "a25c9e52e0ad2cb7546bcf5b7b1a555419d557bcaf06d26f55f504f1f1943114",
+      "bytes": 2260
+    },
+    "source/network/NetHost.h": {
+      "url": "https://gitea.wildfiregames.com/0ad/0ad/raw/tag/v0.28.0/source/network/NetHost.h",
+      "sha256": "8661bf02e1d287c5c0a23f4279ca4af968473c44460d0ecf87abbfdfaa609a9d",
+      "bytes": 3143
+    },
+    "source/network/NetMessage.cpp": {
+      "url": "https://gitea.wildfiregames.com/0ad/0ad/raw/tag/v0.28.0/source/network/NetMessage.cpp",
+      "sha256": "1f02e697b5287d4b69ff6f992de1d13c3317bfab7bdb063e809127a95ceca02e",
+      "bytes": 5024
+    },
+    "source/network/NetMessage.h": {
+      "url": "https://gitea.wildfiregames.com/0ad/0ad/raw/tag/v0.28.0/source/network/NetMessage.h",
+      "sha256": "3d25d21673abfd5b97f56c0a299b5724daaccbcf1c229cf9a5f98eb5996ae0ae",
+      "bytes": 5244
+    },
+    "source/network/NetMessages.h": {
+      "url": "https://gitea.wildfiregames.com/0ad/0ad/raw/tag/v0.28.0/source/network/NetMessages.h",
+      "sha256": "8d450704019910ecdbffdd590327f74bbb4921cea2d45a890809256f87bd637e",
+      "bytes": 7489
+    },
+    "source/network/NetMessageSim.cpp": {
+      "url": "https://gitea.wildfiregames.com/0ad/0ad/raw/tag/v0.28.0/source/network/NetMessageSim.cpp",
+      "sha256": "f3895396c78d48579ca4148dac464b13bd979aa5f975b68ffa68ce927ce68e67",
+      "bytes": 7642
+    },
+    "source/network/NetProtocol.cpp": {
+      "url": "https://gitea.wildfiregames.com/0ad/0ad/raw/tag/v0.28.0/source/network/NetProtocol.cpp",
+      "sha256": "41d257ee897c55d26fe58a5d4cc739080ed46ca024b1344905394f4270a39457",
+      "bytes": 1945
+    },
+    "source/network/NetProtocol.h": {
+      "url": "https://gitea.wildfiregames.com/0ad/0ad/raw/tag/v0.28.0/source/network/NetProtocol.h",
+      "sha256": "8b5ad7d3e2d57fd1e573e60a2147b8e69391d3c2683ebd423b0a313de7ab9c79",
+      "bytes": 1847
+    },
+    "source/network/NetServer.cpp": {
+      "url": "https://gitea.wildfiregames.com/0ad/0ad/raw/tag/v0.28.0/source/network/NetServer.cpp",
+      "sha256": "719335d11d57585c3c491f51cfb40c2497585efb9552dfd5588a893b4a10bb86",
+      "bytes": 56987
+    },
+    "source/network/NetServerTurnManager.cpp": {
+      "url": "https://gitea.wildfiregames.com/0ad/0ad/raw/tag/v0.28.0/source/network/NetServerTurnManager.cpp",
+      "sha256": "47c0391b78b40f6595523971c9eb229207206351e82d6954f8cb0bb6b27a72e7",
+      "bytes": 7590
+    },
+    "source/network/NetSession.cpp": {
+      "url": "https://gitea.wildfiregames.com/0ad/0ad/raw/tag/v0.28.0/source/network/NetSession.cpp",
+      "sha256": "ff24f1a72edace905a9f917098fcb8111bde84769fdbb7d0795e44a9983fd061",
+      "bytes": 7158
+    },
+    "source/network/NMTCreator.h": {
+      "url": "https://gitea.wildfiregames.com/0ad/0ad/raw/tag/v0.28.0/source/network/NMTCreator.h",
+      "sha256": "f98737fb8ac7751d54d70d70c19b9e1ff6bc8d5e40dde7cf856b5977376a81f6",
+      "bytes": 8919
+    },
+    "source/ps/Pyrogenesis.h": {
+      "url": "https://gitea.wildfiregames.com/0ad/0ad/raw/tag/v0.28.0/source/ps/Pyrogenesis.h",
+      "sha256": "1a5ebbccd9131689ca4500c2a73d382968c6762a16407d443caceceb3b43397f",
+      "bytes": 1191
+    },
+    "source/network/Serialization.h": {
+      "url": "https://gitea.wildfiregames.com/0ad/0ad/raw/tag/v0.28.0/source/network/Serialization.h",
+      "sha256": "d51c8f0a7dca65579d66c7d12c8d4584967a444b75315beea71c8126904a18d9",
+      "bytes": 3228
+    },
+    "source/lobby/XmppClient.cpp": {
+      "url": "https://gitea.wildfiregames.com/0ad/0ad/raw/tag/v0.28.0/source/lobby/XmppClient.cpp",
+      "sha256": "5e2fe9e4f7256a8fe05a10f622bb0c5556db66782845bb885014a316c4aba8fb",
+      "bytes": 47861
+    },
+    "source/network/scripting/JSInterface_Network.cpp": {
+      "url": "https://gitea.wildfiregames.com/0ad/0ad/raw/tag/v0.28.0/source/network/scripting/JSInterface_Network.cpp",
+      "sha256": "a1791524a5bead977f0f2691280ae5e0062aefa962e51115732886323577faf4",
+      "bytes": 11583
+    },
+    "source/ps/scripting/JSInterface_Main.cpp": {
+      "url": "https://gitea.wildfiregames.com/0ad/0ad/raw/tag/v0.28.0/source/ps/scripting/JSInterface_Main.cpp",
+      "sha256": "2eb74fd005d8b6fbb83e1c2e37d953d5a1e4a44bb90d095f755ae06d895ec542",
+      "bytes": 4458
+    }
+  }
+}
